@@ -1,0 +1,15 @@
+{
+  "name": "context-scaling",
+  "_comment": "How throughput changes with context length. Matters in practice: real documents are long, so prefill on a long input is what you actually pay for - not prefill on 512 tokens.",
+  "runs": 2,
+  "cooldown_s": 60,
+  "temp_limit_c": 95,
+  "models": [
+    { "name": "gpt-oss-20b", "path": "~/models/gpt-oss-20b/gpt-oss-20b-MXFP4.gguf" }
+  ],
+  "configs": [
+    { "name": "ctx-512",  "env": {"HIP_VISIBLE_DEVICES":"0"}, "args": ["-ngl","999","-sm","none","-p","512","-n","128"] },
+    { "name": "ctx-2048", "env": {"HIP_VISIBLE_DEVICES":"0"}, "args": ["-ngl","999","-sm","none","-p","2048","-n","128"] },
+    { "name": "ctx-8192", "env": {"HIP_VISIBLE_DEVICES":"0"}, "args": ["-ngl","999","-sm","none","-p","8192","-n","128"] }
+  ]
+}

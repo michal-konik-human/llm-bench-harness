@@ -1,0 +1,18 @@
+{
+  "name": "multi-gpu-template",
+  "_comment": "TEMPLATE for multiple GPUs - adjust before using. Two environment variables are mandatory on multi-GPU AMD setups: without NCCL_PROTO=Simple, tensor-parallel deadlocks on the first all-reduce; without NCCL_P2P_DISABLE=1, a four-card host can hang at random. Also note these cards have no XGMI, so every byte between them crosses PCIe.",
+  "runs": 3,
+  "cooldown_s": 60,
+  "temp_limit_c": 95,
+  "models": [
+    { "name": "big-model", "path": "~/models/big-model/model.gguf" }
+  ],
+  "configs": [
+    { "name": "2gpu-layer",
+      "env": { "HIP_VISIBLE_DEVICES": "0,1", "NCCL_PROTO": "Simple", "NCCL_P2P_DISABLE": "1" },
+      "args": ["-ngl","999","-sm","layer","-ts","1,1","-p","512","-n","128"] },
+    { "name": "4gpu-layer",
+      "env": { "HIP_VISIBLE_DEVICES": "0,1,2,3", "NCCL_PROTO": "Simple", "NCCL_P2P_DISABLE": "1" },
+      "args": ["-ngl","999","-sm","layer","-ts","1,1,1,1","-p","512","-n","128"] }
+  ]
+}

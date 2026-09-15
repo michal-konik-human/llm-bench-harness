@@ -1,0 +1,501 @@
+#!/usr/bin/env python3
+"""
+bench-model — benchmark a new model with one command.
+
+This is the entry point for the whole "I downloaded a model, measure it" flow.
+Designed so a SMALL local model can drive it: the agent doesn't infer anything or
+assemble a config, it just passes a model name.
+
+  bench-model --list-new                 which models have no result yet
+  bench-model qwen3-32b                  measure one model (by directory name)
+  bench-model ~/models/foo/bar.gguf      or by path
+  bench-model --all-new                  measure everything unmeasured
+  bench-model qwen3-32b --quick          throughput only, skip the thermal test
+  bench-model --reindex                  rebuild results/INDEX.md
+
+WHAT IT DOES SO THE CALLER DOESN'T HAVE TO THINK
+
+  1. Checks the model even fits in VRAM (weights + headroom for KV cache).
+  2. Checks hardware state BEFORE measuring, and refuses to start on a hot card or
+     with non-zero error counters — the result would be void anyway.
+  3. Runs TWO tests, because one is not enough:
+       throughput  (-p 512  -n 128)   short; measures tok/s
+       thermal     (-p 4096 -n 1024)  long;  measures real temperature and power
+     Without the long test, fast MoE models report an absurd ~19 W peak, because the
+     entire computation finishes faster than the telemetry sampling period.
+  4. Generates the config and calls bench.py, which holds the actual methodology
+     (separate processes, condition recording, ECC/AER before and after, thermal guard).
+  5. Appends a row to results/INDEX.md — a growing comparison table of every model
+     ever measured, with its conditions.
+  6. Prints ONE final line, `VERDICT: ...`, for the caller to act on.
+
+Environment overrides: see bench.py (RIG_GPU_INDEX, RIG_GPU_BDF, RIG_VRAM_MB,
+RIG_MODELS_DIR).
+
+License: MIT
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent
+MODELS_DIR = Path(os.environ.get("RIG_MODELS_DIR", Path.home() / "models"))
+RESULTS = BASE / "results"
+INDEX = RESULTS / "INDEX.md"
+BENCH = BASE / "bench.py"
+
+GPU_INDEX = int(os.environ.get("RIG_GPU_INDEX", "0"))
+
+# Fraction of VRAM we allow the weights to occupy. The rest is KV cache, which grows
+# with context length — a model that exactly fills VRAM cannot hold any context.
+WEIGHTS_BUDGET_FRACTION = 0.75
+
+# Above this junction temperature the card has not cooled down from a previous run,
+# and the first run of a new series would start warm and measure low.
+START_TEMP_MAX_C = 45
+
+
+def run(cmd, timeout=60):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout, p.stderr
+    except Exception as exc:
+        return -1, "", str(exc)
+
+
+def run_json(cmd, timeout=60):
+    _, out, _ = run(cmd, timeout)
+    if not out.strip():
+        return None
+    try:
+        return json.loads(out)
+    except Exception:
+        return None
+
+
+def dsec(node, name):
+    """amd-smi returns a bare "N/A" string instead of a dict for some sections."""
+    if not isinstance(node, dict):
+        return {}
+    v = node.get(name)
+    return v if isinstance(v, dict) else {}
+
+
+def leaf(x, default=None):
+    if isinstance(x, dict):
+        x = x.get("value")
+    return default if x in (None, "N/A") else x
+
+
+# ------------------------------------------------------------------- discovery
+
+def gpu_bdf():
+    override = os.environ.get("RIG_GPU_BDF")
+    if override:
+        return override
+    data = run_json(["amd-smi", "static", "-g", str(GPU_INDEX), "--json"], timeout=25)
+    if data and data.get("gpu_data"):
+        return leaf(dsec(data["gpu_data"][0], "bus").get("bdf"))
+    return None
+
+
+def vram_total_mb():
+    override = os.environ.get("RIG_VRAM_MB")
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    data = run_json(["amd-smi", "metric", "-g", str(GPU_INDEX), "--json"], timeout=25)
+    if data and data.get("gpu_data"):
+        v = leaf(dsec(data["gpu_data"][0], "mem_usage").get("total_vram"))
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def find_models():
+    """Every .gguf under the models directory, grouped by containing directory."""
+    out = {}
+    if not MODELS_DIR.exists():
+        return out
+    for p in sorted(MODELS_DIR.rglob("*.gguf")):
+        # skip every shard of a multi-part model except the first
+        if re.search(r"-0000[2-9]-of-", p.name):
+            continue
+        name = p.parent.name if p.parent != MODELS_DIR else p.stem
+        # one model per directory: keep the largest file
+        if name not in out or p.stat().st_size > out[name].stat().st_size:
+            out[name] = p
+    return out
+
+
+def already_measured():
+    done = set()
+    for rj in RESULTS.glob("*/results.json"):
+        try:
+            rec = json.loads(rj.read_text())
+        except Exception:
+            continue
+        for cell in rec.get("cells", []):
+            if cell.get("runs"):
+                done.add(cell.get("model"))
+    return done
+
+
+# -------------------------------------------------------------------- preflight
+
+def preflight():
+    """Return (ok, [messages]). Refuses to measure on a hot or unhealthy card."""
+    msgs, ok = [], True
+    data = run_json(["amd-smi", "metric", "-g", str(GPU_INDEX), "--json"], timeout=25)
+    if not data or not data.get("gpu_data"):
+        return False, ["amd-smi not responding — cannot record conditions"]
+    g = data["gpu_data"][0]
+    t, e = dsec(g, "temperature"), dsec(g, "ecc")
+
+    junction = leaf(t.get("hotspot"))
+    if isinstance(junction, (int, float)):
+        if junction > START_TEMP_MAX_C:
+            ok = False
+            msgs.append(f"card has NOT cooled down: junction {junction} C "
+                        f"(need <= {START_TEMP_MAX_C} C) — wait and retry")
+        else:
+            msgs.append(f"junction {junction} C — card is cool")
+
+    unc = leaf(e.get("total_uncorrectable_count"), 0)
+    if unc not in (0, None):
+        ok = False
+        msgs.append(f"uncorrectable ECC = {unc} — hardware fault, DO NOT measure")
+    else:
+        msgs.append("uncorrectable ECC = 0")
+
+    bdf = gpu_bdf()
+    aer = 0
+    for kind in ("fatal", "nonfatal"):
+        raw = ""
+        if bdf:
+            try:
+                raw = Path(f"/sys/bus/pci/devices/{bdf}/aer_dev_{kind}").read_text()
+            except OSError:
+                pass
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                try:
+                    aer += int(parts[1])
+                except ValueError:
+                    pass
+    if aer:
+        ok = False
+        msgs.append(f"PCIe AER fatal/nonfatal = {aer} — physical problem, DO NOT measure")
+    else:
+        msgs.append("PCIe AER fatal/nonfatal = 0")
+
+    # A second consumer on the GPU makes the run measure contention, not the model.
+    procs = run_json(["amd-smi", "process", "--json"], timeout=25)
+    holders = []
+    if isinstance(procs, list):
+        for entry in procs:
+            if entry.get("gpu") != GPU_INDEX:
+                continue
+            for item in entry.get("process_list") or []:
+                info = item.get("process_info") if isinstance(item, dict) else None
+                if isinstance(info, dict) and info.get("name"):
+                    holders.append(Path(str(info["name"])).name)
+    if holders:
+        ok = False
+        msgs.append(f"GPU is NOT exclusive — held by: {', '.join(holders)}. "
+                    f"Stop them (an agent's model? a stray llama-server?) first")
+    else:
+        msgs.append("GPU is exclusive")
+
+    cap = None
+    st = run_json(["amd-smi", "static", "-g", str(GPU_INDEX), "--json"], timeout=25)
+    if st and st.get("gpu_data"):
+        cap = leaf(dsec(dsec(st["gpu_data"][0], "limit"), "ppt0")
+                   .get("socket_power_limit"))
+    msgs.append(f"power cap: {cap} W")
+    return ok, msgs
+
+
+def fits_check(path):
+    total = vram_total_mb()
+    mb = path.stat().st_size / (1024 * 1024)
+    if not total:
+        return "UNKNOWN", mb, None
+    budget = total * WEIGHTS_BUDGET_FRACTION
+    if mb > total:
+        return "DOES_NOT_FIT", mb, total
+    if mb > budget:
+        return "TIGHT", mb, total
+    return "OK", mb, total
+
+
+# ------------------------------------------------------------------ measurement
+
+def build_config(name, path, quick):
+    cfgs = [{
+        "name": "throughput",
+        "env": {"HIP_VISIBLE_DEVICES": str(GPU_INDEX)},
+        "args": ["-ngl", "999", "-sm", "none", "-p", "512", "-n", "128"],
+    }]
+    if not quick:
+        # The long test exists so the thermal telemetry is MEANINGFUL. On a short test
+        # a fast MoE model finishes in under a second and the sampler never sees the
+        # load — the report then shows an absurd ~19 W peak.
+        cfgs.append({
+            "name": "thermal",
+            "env": {"HIP_VISIBLE_DEVICES": str(GPU_INDEX)},
+            "args": ["-ngl", "999", "-sm", "none", "-p", "4096", "-n", "1024"],
+        })
+    return {
+        "name": f"new-model-{name}",
+        "runs": 3,
+        "cooldown_s": 45,
+        "temp_limit_c": 95,
+        "models": [{"name": name, "path": str(path)}],
+        "configs": cfgs,
+    }
+
+
+def latest_result_dir(before):
+    dirs = {p for p in RESULTS.glob("*") if (p / "results.json").exists()}
+    new = dirs - before
+    return max(new, key=lambda p: p.name) if new else None
+
+
+def summarise_result(outdir):
+    rec = json.loads((outdir / "results.json").read_text())
+    env = rec["environment"]
+    lines, index_rows, worst = [], [], "OK"
+
+    for cell in rec["cells"]:
+        if cell.get("error") or not cell.get("runs"):
+            worst = "INVALID"
+            lines.append(f"  {cell.get('model')}/{cell.get('config')}: NO RESULT "
+                         f"({cell.get('error', 'aborted')})")
+            continue
+        per = {}
+        for r in cell["runs"]:
+            for test, v in (r.get("results") or {}).items():
+                per.setdefault(test, []).append(v["tok_s"])
+        if not per:
+            worst = "INVALID"
+            lines.append(f"  {cell['model']}/{cell['config']}: NO RESULT")
+            continue
+        pj = max((r["peak"]["junction_c"] for r in cell["runs"]), default=0)
+        pw = max((r["peak"]["power_w"] for r in cell["runs"]), default=0)
+        for test, vals in per.items():
+            mean = sum(vals) / len(vals)
+            spread = (max(vals) - min(vals)) / mean * 100 if mean else 0
+            note = ""
+            if spread > 10:
+                note = "  <-- SPREAD>10%: bimodal, do NOT report the mean"
+                worst = "WITH_CAVEAT" if worst == "OK" else worst
+            if isinstance(pj, (int, float)) and pj >= 85:
+                note += "  <-- junction>=85C: measuring cooling"
+                worst = "WITH_CAVEAT" if worst == "OK" else worst
+            lines.append(f"  {cell['model']}/{cell['config']} {test}: "
+                         f"{mean:.2f} tok/s (spread {spread:.1f}%, "
+                         f"peak junction {pj}C, {pw}W){note}")
+            index_rows.append({
+                "model": cell["model"], "config": cell["config"], "test": test,
+                "mean": mean, "spread": spread, "junction": pj, "power": pw,
+                "cap": cell.get("power_cap_w"), "run_id": rec["run_id"],
+                "commit": env.get("llama_cpp_commit"), "rocm": env.get("rocm"),
+            })
+
+    drift = [k for k in env.get("aer_before", {})
+             if env.get("aer_before", {}).get(k) != env.get("aer_after", {}).get(k)]
+    drift += [k for k in env.get("ecc_before", {})
+              if env.get("ecc_before", {}).get(k) != env.get("ecc_after", {}).get(k)]
+    if drift:
+        worst = "INVALID"
+        lines.append(f"  !! hardware error counters increased during the run: "
+                     f"{', '.join(drift)} — DISCARD THIS RESULT")
+
+    return worst, lines, index_rows
+
+
+def append_index(rows):
+    header = (
+        "# Measurement index — every model measured\n\n"
+        "Appended automatically by `bench-model`. Newest at the bottom.\n\n"
+        "`spread` is the difference between the best and worst independent run.\n"
+        "Above 10 % indicates bimodality — the mean in this table is then misleading\n"
+        "and you should open that run's `report.md`.\n\n"
+        "**Only compare rows with the same power cap and the same llama.cpp commit.**\n"
+        "Otherwise you are comparing conditions, not models.\n\n"
+        "| run_id | model | config | test | tok/s | spread | junction | power | cap | llama.cpp | ROCm |\n"
+        "|---|---|---|---|---:|---:|---:|---:|---:|---|---|\n"
+    )
+    if not INDEX.exists():
+        INDEX.parent.mkdir(parents=True, exist_ok=True)
+        INDEX.write_text(header, encoding="utf-8")
+    with INDEX.open("a", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(f"| {r['run_id']} | {r['model']} | {r['config']} | {r['test']} "
+                     f"| {r['mean']:.2f} | {r['spread']:.1f}% | {r['junction']} °C "
+                     f"| {r['power']} W | {r['cap']} | `{r['commit']}` | {r['rocm']} |\n")
+
+
+def rebuild_index():
+    """Rebuild INDEX.md from every existing result in results/."""
+    if INDEX.exists():
+        INDEX.rename(INDEX.with_suffix(".md.bak"))
+    rows = []
+    for rj in sorted(RESULTS.glob("*/results.json")):
+        try:
+            rec = json.loads(rj.read_text())
+        except Exception:
+            continue
+        env = rec.get("environment", {})
+        for cell in rec.get("cells", []):
+            if not cell.get("runs"):
+                continue
+            per = {}
+            for r in cell["runs"]:
+                for test, v in (r.get("results") or {}).items():
+                    per.setdefault(test, []).append(v["tok_s"])
+            pj = max((r["peak"]["junction_c"] for r in cell["runs"]), default=0)
+            pw = max((r["peak"]["power_w"] for r in cell["runs"]), default=0)
+            for test, vals in per.items():
+                mean = sum(vals) / len(vals)
+                rows.append({
+                    "model": cell["model"], "config": cell["config"], "test": test,
+                    "mean": mean,
+                    "spread": (max(vals) - min(vals)) / mean * 100 if mean else 0,
+                    "junction": pj, "power": pw, "cap": cell.get("power_cap_w"),
+                    "run_id": rec.get("run_id", "?"),
+                    "commit": env.get("llama_cpp_commit"), "rocm": env.get("rocm"),
+                })
+    append_index(rows)
+    print(f"Index rebuilt: {len(rows)} rows from "
+          f"{len(list(RESULTS.glob('*/results.json')))} runs\n  {INDEX}")
+
+
+def measure(name, path, quick):
+    print(f"\n{'=' * 70}\n MODEL: {name}\n file : {path}\n{'=' * 70}")
+
+    status, mb, total = fits_check(path)
+    print(f"\n[1/4] Does it fit in VRAM ({total or '?'} MiB)")
+    print(f"      weights: {mb:.0f} MiB")
+    if status == "DOES_NOT_FIT":
+        print("      DOES NOT FIT. Part would spill to host RAM, and you would be")
+        print("      measuring PCIe transfer rather than the GPU. Use a smaller quant.")
+        print(f"\nVERDICT: SKIPPED ({name}: larger than VRAM)")
+        return "SKIPPED"
+    if status == "TIGHT":
+        print(f"      TIGHT (over {WEIGHTS_BUDGET_FRACTION:.0%} of VRAM) — it fits, but")
+        print("      KV cache will compete for space; keep the context short.")
+    elif status == "OK":
+        print(f"      OK, headroom for KV cache: {total - mb:.0f} MiB")
+    else:
+        print("      Could not read VRAM size; proceeding without the fit check.")
+
+    print("\n[2/4] Hardware state before measuring")
+    ok, msgs = preflight()
+    for m in msgs:
+        print(f"      {m}")
+    if not ok:
+        print(f"\nVERDICT: INVALID ({name}: preflight failed — see above)")
+        return "INVALID"
+
+    cfg = build_config(name, path, quick)
+    cfg_path = Path("/tmp") / f"bench-model-{name}.json"
+    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    print(f"\n[3/4] Measuring: {len(cfg['configs'])} config(s) x {cfg['runs']} "
+          f"independent processes")
+
+    before = {p for p in RESULTS.glob("*") if (p / "results.json").exists()}
+    rc = subprocess.call([sys.executable, str(BENCH), str(cfg_path)])
+    outdir = latest_result_dir(before)
+    if rc != 0 or not outdir:
+        print(f"\nVERDICT: INVALID ({name}: bench.py returned no result)")
+        return "INVALID"
+
+    print("\n[4/4] Summary")
+    verdict, lines, rows = summarise_result(outdir)
+    for line in lines:
+        print(line)
+    append_index(rows)
+    print(f"\n      report: {outdir / 'report.md'}")
+    print(f"      index : {INDEX}")
+    print(f"\nVERDICT: {verdict} ({name}: report in {outdir.name})")
+    return verdict
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Benchmark a new model with one command")
+    ap.add_argument("model", nargs="?",
+                    help="directory name under the models dir, or a path to a .gguf")
+    ap.add_argument("--list-new", action="store_true", help="models with no result yet")
+    ap.add_argument("--all-new", action="store_true", help="measure all unmeasured")
+    ap.add_argument("--quick", action="store_true", help="skip the long thermal test")
+    ap.add_argument("--reindex", action="store_true",
+                    help="rebuild results/INDEX.md from existing results")
+    args = ap.parse_args()
+
+    if args.reindex:
+        rebuild_index()
+        return
+
+    found = find_models()
+    done = already_measured()
+
+    if args.list_new:
+        new = {k: v for k, v in found.items() if k not in done}
+        print(f"\nModels with NO measurement (in {MODELS_DIR}):")
+        if not new:
+            print("  (none — everything measured)")
+        for k, v in new.items():
+            print(f"  {k:<24} {v.stat().st_size / 1e9:6.1f} GB  {v}")
+        print("\nAlready measured:")
+        for k in sorted(done):
+            print(f"  {k}")
+        print(f"\nIndex: {INDEX if INDEX.exists() else '(not created yet)'}\n")
+        return
+
+    targets = []
+    if args.all_new:
+        targets = [(k, v) for k, v in found.items() if k not in done]
+        if not targets:
+            print("No unmeasured models.")
+            return
+    elif args.model:
+        p = Path(os.path.expanduser(args.model))
+        if p.is_file():
+            targets = [(p.parent.name or p.stem, p)]
+        elif args.model in found:
+            targets = [(args.model, found[args.model])]
+        else:
+            print(f"Unknown model '{args.model}'. Available: "
+                  f"{', '.join(found) or 'none'}")
+            print("Pass a directory name under the models dir, or a full .gguf path.")
+            sys.exit(1)
+    else:
+        ap.error("pass a model, or --list-new / --all-new / --reindex")
+
+    verdicts = {}
+    for name, path in targets:
+        verdicts[name] = measure(name, path, args.quick)
+        if len(targets) > 1:
+            time.sleep(60)   # cool down between models
+
+    if len(verdicts) > 1:
+        print(f"\n{'=' * 70}\n VERDICTS\n{'=' * 70}")
+        for k, v in verdicts.items():
+            print(f"  {v:<14} {k}")
+
+
+if __name__ == "__main__":
+    main()
