@@ -1,0 +1,3 @@
+model,config,power_cap_w,test,n,mean_tok_s,min_tok_s,max_tok_s,spread_pct,peak_junction_c,peak_vram_c,peak_power_w,link_width,link_speed,llama_commit,rocm
+gpt-oss-20b,throughput,300,pp512,3,6038.74,6023.20,6057.85,0.57,30,30,19,16,32.0 GT/s PCIe,987498f,7.2.4
+gpt-oss-20b,throughput,300,tg128,3,149.72,149.56,149.82,0.17,30,30,19,16,32.0 GT/s PCIe,987498f,7.2.4

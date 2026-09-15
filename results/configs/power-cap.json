@@ -1,0 +1,17 @@
+{
+  "name": "power-cap-cost",
+  "_comment": "What a lower power cap costs in tokens. NOTE: cards have a firmware floor - on the Radeon AI PRO R9700 it is 210 W, and anything lower is rejected. Setting the cap needs passwordless sudo for amd-smi.",
+  "runs": 3,
+  "cooldown_s": 60,
+  "temp_limit_c": 95,
+  "models": [
+    { "name": "gpt-oss-20b", "path": "~/models/gpt-oss-20b/gpt-oss-20b-MXFP4.gguf" },
+    { "name": "qwen3-32b",   "path": "~/models/qwen3-32b/Qwen_Qwen3-32B-Q4_K_M.gguf" }
+  ],
+  "configs": [
+    { "name": "300W-stock",  "power_cap_w": 300, "env": {"HIP_VISIBLE_DEVICES":"0"},
+      "args": ["-ngl","999","-sm","none","-p","512","-n","128"] },
+    { "name": "210W-capped", "power_cap_w": 210, "env": {"HIP_VISIBLE_DEVICES":"0"},
+      "args": ["-ngl","999","-sm","none","-p","512","-n","128"] }
+  ]
+}

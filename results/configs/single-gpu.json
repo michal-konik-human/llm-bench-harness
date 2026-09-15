@@ -1,0 +1,19 @@
+{
+  "name": "single-gpu-baseline",
+  "_comment": "Baseline on one GPU at whatever power cap is currently set. Simplest starting point.",
+  "runs": 3,
+  "cooldown_s": 45,
+  "temp_limit_c": 95,
+  "models": [
+    { "name": "gpt-oss-20b", "path": "~/models/gpt-oss-20b/gpt-oss-20b-MXFP4.gguf" },
+    { "name": "qwen3-32b",   "path": "~/models/qwen3-32b/Qwen_Qwen3-32B-Q4_K_M.gguf" }
+  ],
+  "configs": [
+    {
+      "name": "rocm-1gpu",
+      "binary": "~/llama.cpp/build/bin/llama-bench",
+      "env": { "HIP_VISIBLE_DEVICES": "0" },
+      "args": ["-ngl", "999", "-sm", "none", "-p", "512", "-n", "128"]
+    }
+  ]
+}
