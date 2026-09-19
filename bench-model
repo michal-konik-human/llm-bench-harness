@@ -11,7 +11,7 @@ assemble a config, it just passes a model name.
   bench-model ~/models/foo/bar.gguf      or by path
   bench-model --all-new                  measure everything unmeasured
   bench-model qwen3-32b --quick          throughput only, skip the thermal test
-  bench-model --reindex                  rebuild results/INDEX.md
+  bench-model --reindex                  rebuild results/all-benchmark-results.md
 
 WHAT IT DOES SO THE CALLER DOESN'T HAVE TO THINK
 
@@ -25,7 +25,7 @@ WHAT IT DOES SO THE CALLER DOESN'T HAVE TO THINK
      entire computation finishes faster than the telemetry sampling period.
   4. Generates the config and calls bench.py, which holds the actual methodology
      (separate processes, condition recording, ECC/AER before and after, thermal guard).
-  5. Appends a row to results/INDEX.md — a growing comparison table of every model
+  5. Appends a row to results/all-benchmark-results.md — a growing comparison table of every model
      ever measured, with its conditions.
   6. Prints ONE final line, `VERDICT: ...`, for the caller to act on.
 
@@ -47,7 +47,7 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent
 MODELS_DIR = Path(os.environ.get("RIG_MODELS_DIR", Path.home() / "models"))
 RESULTS = BASE / "results"
-INDEX = RESULTS / "INDEX.md"
+INDEX = RESULTS / "all-benchmark-results.md"
 BENCH = BASE / "bench.py"
 
 GPU_INDEX = int(os.environ.get("RIG_GPU_INDEX", "0"))
@@ -349,7 +349,7 @@ def append_index(rows):
 
 
 def rebuild_index():
-    """Rebuild INDEX.md from every existing result in results/."""
+    """Rebuild all-benchmark-results.md from every existing result in results/."""
     if INDEX.exists():
         INDEX.rename(INDEX.with_suffix(".md.bak"))
     rows = []
@@ -442,7 +442,7 @@ def main():
     ap.add_argument("--all-new", action="store_true", help="measure all unmeasured")
     ap.add_argument("--quick", action="store_true", help="skip the long thermal test")
     ap.add_argument("--reindex", action="store_true",
-                    help="rebuild results/INDEX.md from existing results")
+                    help="rebuild results/all-benchmark-results.md from existing results")
     args = ap.parse_args()
 
     if args.reindex:

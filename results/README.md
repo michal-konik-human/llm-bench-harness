@@ -9,7 +9,7 @@ local agent.
 ```bash
 bench-model --list-new       # which models have no result yet
 bench-model qwen3-32b        # measure one, end to end
-cat results/INDEX.md         # every model ever measured, side by side
+cat results/all-benchmark-results.md         # every model ever measured, side by side
 ```
 
 ---
@@ -150,10 +150,10 @@ results/<timestamp>/
 ├── results.json   full machine-readable record
 ├── results.csv    spreadsheet
 └── raw.log        raw llama-bench output
-results/INDEX.md   growing comparison table across ALL runs
+results/all-benchmark-results.md   growing comparison table across ALL runs
 ```
 
-`INDEX.md` is the point of the whole thing: one table where every model you've ever
+`all-benchmark-results.md` is the point of the whole thing: one table where every model you've ever
 measured sits beside the others **with its conditions**. Only compare rows with the same
 power cap and the same `llama.cpp` commit — otherwise you're comparing conditions, not
 models.
