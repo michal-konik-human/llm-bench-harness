@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""
+models-status — one screen answering "what models do I have, and what is running?"
+
+Local model tooling tends to answer only half of that. A serving proxy knows what it
+is serving but not what is sitting on disk unconfigured; the filesystem knows what you
+downloaded but not what is loaded. This joins them, and adds whether each model fits in
+VRAM and whether it has ever been benchmarked.
+
+Sources, all optional — each section degrades gracefully if its source is absent:
+
+  filesystem      *.gguf under the models directory (size, quantisation, VRAM fit)
+  llama-swap      /v1/models (configured) and /running (loaded), if reachable
+  amd-smi         VRAM in use, temperature, power, which processes hold the GPU
+  all-benchmark-results.md        whether the model has a recorded benchmark result
+
+  models-status            full view
+  models-status --short    one line per downloaded model
+  models-status --json     machine-readable
+
+Environment:
+  RIG_MODELS_DIR    default ~/models
+  LLAMA_SWAP_URL    default http://127.0.0.1:8080
+  BENCH_INDEX       default ~/bench/results/all-benchmark-results.md
+
+License: MIT
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+MODELS_DIR = Path(os.environ.get("RIG_MODELS_DIR", Path.home() / "models"))
+SWAP_URL = os.environ.get("LLAMA_SWAP_URL", "http://127.0.0.1:8080")
+INDEX = Path(os.environ.get("BENCH_INDEX", Path.home() / "bench/results/all-benchmark-results.md"))
+
+# Fraction of VRAM the weights may occupy; the rest is KV cache, which grows with
+# context length. A model that exactly fills VRAM cannot hold any context.
+WEIGHTS_BUDGET = 0.75
+
+C_RESET, C_DIM, C_OK, C_WARN, C_CRIT, C_HEAD = (
+    "\033[0m", "\033[2m", "\033[32m", "\033[33m", "\033[31m", "\033[1;36m")
+
+QUANTS = ["MXFP4", "Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_0", "Q4_1", "Q4_K_S",
+          "Q4_K_M", "Q5_0", "Q5_1", "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0", "BF16",
+          "F16", "FP16", "F32"]
+
+
+def c(on, code, text):
+    return f"{code}{text}{C_RESET}" if on else text
+
+
+def head(title, tty):
+    print(c(tty, C_HEAD, f"── {title} " + "─" * max(4, 54 - len(title))))
+
+
+def run_json(cmd, timeout=20):
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=timeout).stdout
+        return json.loads(out) if out.strip() else None
+    except Exception:
+        return None
+
+
+def http_json(path, timeout=6):
+    try:
+        out = subprocess.run(
+            ["curl", "-sS", "--max-time", str(timeout), f"{SWAP_URL}{path}"],
+            capture_output=True, text=True, timeout=timeout + 4).stdout
+        return json.loads(out) if out.strip() else None
+    except Exception:
+        return None
+
+
+def dsec(node, name):
+    """amd-smi returns a bare 'N/A' string instead of a dict for some sections."""
+    if not isinstance(node, dict):
+        return {}
+    v = node.get(name)
+    return v if isinstance(v, dict) else {}
+
+
+def leaf(x, default=None):
+    if isinstance(x, dict):
+        x = x.get("value")
+    return default if x in (None, "N/A") else x
+
+
+def detect_quant(name):
+    upper = name.upper()
+    for q in QUANTS:
+        if q in upper:
+            return q
+    return "?"
+
+
+# ------------------------------------------------------------------- collectors
+
+def downloaded():
+    out = []
+    if not MODELS_DIR.exists():
+        return out
+    seen = {}
+    for p in sorted(MODELS_DIR.rglob("*.gguf")):
+        if re.search(r"-0000[2-9]-of-", p.name):     # only the first shard
+            continue
+        key = p.parent.name if p.parent != MODELS_DIR else p.stem
+        if key not in seen or p.stat().st_size > seen[key].stat().st_size:
+            seen[key] = p
+    for name, p in seen.items():
+        out.append({"name": name, "path": str(p), "file": p.name,
+                    "gb": p.stat().st_size / 1e9, "quant": detect_quant(p.name)})
+    return sorted(out, key=lambda m: m["name"])
+
+
+def gpu_state():
+    data = run_json(["amd-smi", "metric", "-g", "0", "--json"], timeout=25)
+    if not data or not data.get("gpu_data"):
+        return None
+    g = data["gpu_data"][0]
+    mem, t, p = dsec(g, "mem_usage"), dsec(g, "temperature"), dsec(g, "power")
+    return {
+        "vram_used_mb": leaf(mem.get("used_vram")),
+        "vram_total_mb": leaf(mem.get("total_vram")),
+        "junction_c": leaf(t.get("hotspot")),
+        "power_w": leaf(p.get("socket_power")),
+        "gfx_pct": leaf(dsec(g, "usage").get("gfx_activity")),
+    }
+
+
+def gpu_holders():
+    data = run_json(["amd-smi", "process", "--json"], timeout=25)
+    out, seen = [], set()
+    if not isinstance(data, list):
+        return out
+    for e in data:
+        for item in e.get("process_list") or []:
+            i = item.get("process_info") if isinstance(item, dict) else None
+            if not isinstance(i, dict) or not i.get("name"):
+                continue
+            pid = i.get("pid")
+            if pid in seen:      # amd-smi lists the same pid under each GPU
+                continue
+            seen.add(pid)
+            vram = leaf(dsec(dsec(i, "memory_usage"), "vram_mem").get("value")) \
+                if isinstance(i.get("memory_usage"), dict) else None
+            out.append({"pid": pid, "name": Path(str(i["name"])).name, "vram": vram})
+    return out
+
+
+def swap_state():
+    models = http_json("/v1/models")
+    running = http_json("/running")
+    if models is None and running is None:
+        return None
+    return {
+        "configured": sorted(m.get("id") for m in (models or {}).get("data", [])),
+        "running": (running or {}).get("running", []),
+    }
+
+
+def benchmarked():
+    """model -> {prefill, decode, run_id} from the harness index, if present."""
+    out = {}
+    if not INDEX.exists():
+        return out
+    for line in INDEX.read_text(encoding="utf-8", errors="ignore").splitlines():
+        cells = [x.strip() for x in line.split("|")]
+        if len(cells) < 6 or not cells[1].startswith("2"):
+            continue
+        run_id, model, _cfg, test, toks = cells[1], cells[2], cells[3], cells[4], cells[5]
+        try:
+            toks = float(toks)
+        except ValueError:
+            continue
+        e = out.setdefault(model, {"run_id": run_id})
+        if test.startswith("pp"):
+            e["prefill"] = toks
+        elif test.startswith("tg"):
+            e["decode"] = toks
+        e["run_id"] = run_id
+    return out
+
+
+# ---------------------------------------------------------------------- render
+
+def main():
+    ap = argparse.ArgumentParser(description="What models do I have, and what is running?")
+    ap.add_argument("--short", action="store_true", help="one line per model")
+    ap.add_argument("--json", action="store_true", help="machine-readable")
+    args = ap.parse_args()
+
+    tty = sys.stdout.isatty() and not args.json
+    dl, gpu, swap = downloaded(), gpu_state(), swap_state()
+    holders, bench = gpu_holders(), benchmarked()
+
+    # which downloaded model is currently loaded, matched by path in the running cmd
+    loaded = {}
+    for r in (swap or {}).get("running", []):
+        cmd = r.get("cmd", "")
+        for m in dl:
+            if m["path"] in cmd:
+                loaded[m["name"]] = r
+    on_cpu = {n for n, r in loaded.items() if re.search(r"-ngl\s+0\b", r.get("cmd", ""))}
+
+    if args.json:
+        print(json.dumps({"downloaded": dl, "gpu": gpu, "llama_swap": swap,
+                          "gpu_holders": holders, "benchmarks": bench,
+                          "loaded": list(loaded)}, indent=2))
+        return
+
+    total = gpu["vram_total_mb"] if gpu and gpu.get("vram_total_mb") else None
+
+    head("DOWNLOADED", tty)
+    if not dl:
+        print(f"  nothing found in {MODELS_DIR}")
+    for m in dl:
+        mb = m["gb"] * 1000
+        if total:
+            if mb > total:
+                fit = c(tty, C_CRIT, "TOO BIG")
+            elif mb > total * WEIGHTS_BUDGET:
+                fit = c(tty, C_WARN, "tight")
+            else:
+                fit = c(tty, C_OK, f"fits (+{(total - mb) / 1000:.0f}GB KV)")
+        else:
+            fit = c(tty, C_DIM, "fit unknown")
+
+        if m["name"] in loaded:
+            where = "CPU" if m["name"] in on_cpu else "GPU"
+            state = c(tty, C_OK, f"● RUNNING ({where})")
+        else:
+            state = c(tty, C_DIM, "  idle")
+
+        b = bench.get(m["name"])
+        mark = c(tty, C_DIM, f"✓ {b.get('decode', '?')} tok/s decode") if b \
+            else c(tty, C_WARN, "not benchmarked")
+        print(f"  {m['name']:<16} {m['gb']:5.1f} GB  {m['quant']:<7} "
+              f"{fit:<32} {state:<28} {mark}")
+        if not args.short:
+            print(c(tty, C_DIM, f"                   {m['file']}"))
+
+    print()
+    head("SERVING", tty)
+    if swap is None:
+        print(f"  llama-swap not reachable at {SWAP_URL}")
+        print(c(tty, C_DIM, "    start it:  sudo systemctl start llama-swap"))
+    else:
+        print(f"  endpoint   {SWAP_URL}/v1        web UI  {SWAP_URL}/ui")
+        print(f"  configured {', '.join(swap['configured']) or '(none)'}")
+        if swap["running"]:
+            for r in swap["running"]:
+                cpu = " on CPU" if re.search(r"-ngl\s+0\b", r.get("cmd", "")) else ""
+                print("  running    " + c(tty, C_OK,
+                      f"{r.get('model')} [{r.get('state')}]{cpu}")
+                      + c(tty, C_DIM, f"  ttl {r.get('ttl', '-')}s  {r.get('proxy', '')}"))
+        else:
+            print("  running    " + c(tty, C_DIM, "nothing loaded"))
+
+    print()
+    head("GPU", tty)
+    if not gpu:
+        print("  amd-smi not responding")
+    else:
+        used, tot = gpu.get("vram_used_mb"), gpu.get("vram_total_mb")
+        print(f"  VRAM  {used} / {tot} MB     junction {gpu.get('junction_c')}C     "
+              f"{gpu.get('power_w')}W     gfx {gpu.get('gfx_pct')}%")
+        if holders:
+            for h in holders:
+                print(f"  held by  {h['name']} (pid {h['pid']})")
+            # The benchmark harness refuses to measure a non-exclusive GPU, on purpose.
+            print(c(tty, C_WARN,
+                    "  NOTE: bench-model will refuse to measure while the GPU is held."))
+            print(c(tty, C_DIM,
+                    f"        free it:  curl -X POST {SWAP_URL}/api/models/unload"))
+        else:
+            print("  held by  " + c(tty, C_OK, "nothing — free for benchmarking"))
+
+    if bench and not args.short:
+        print()
+        head("BENCHMARKS", tty)
+        for name, b in sorted(bench.items()):
+            print(f"  {name:<16} prefill {b.get('prefill', '?'):>8}  "
+                  f"decode {b.get('decode', '?'):>7}   "
+                  + c(tty, C_DIM, f"({b.get('run_id')})"))
+
+
+if __name__ == "__main__":
+    main()

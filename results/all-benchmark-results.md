@@ -1,4 +1,4 @@
-# Measurement index — every model measured
+# All benchmark results — every model measured, with its conditions
 
 Appended automatically by `bench-model`. Newest at the bottom.
 

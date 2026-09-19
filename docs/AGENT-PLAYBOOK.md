@@ -28,7 +28,7 @@ report it to the human.** Do not try to fix hardware.
 | `bench-model <name>` | **Full measurement of one model.** Your main tool |
 | `bench-model --all-new` | Measure every unmeasured model in turn |
 | `bench.py --compare <A> <B>` | Compare two runs |
-| `cat results/INDEX.md` | Growing table of all measurements |
+| `cat results/all-benchmark-results.md` | Growing table of all measurements |
 | `./agent-server.sh --status` | Whether you yourself are on CPU or GPU |
 
 ---
@@ -110,7 +110,7 @@ Take the numbers **from the `bench-model` output**, not from memory and not by e
 ### Step 6 — compare, if there is anything to compare with
 
 ```bash
-cat results/INDEX.md
+cat results/all-benchmark-results.md
 ```
 
 If the index contains another model measured at the **same power cap** and the **same

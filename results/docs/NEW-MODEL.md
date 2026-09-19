@@ -28,7 +28,7 @@ hf download <repo> <file.gguf> --local-dir ~/models/<name>
 ```
 
 **Convention, no exceptions: one model per directory under `~/models/`.** The directory
-name becomes the model name in reports and in `INDEX.md`. `bielik-11b` is good;
+name becomes the model name in reports and in `all-benchmark-results.md`. `bielik-11b` is good;
 `new`, `test2`, `downloaded` are not — in a month you won't know what they were.
 
 Check the file arrived complete:
@@ -56,7 +56,7 @@ bench-model <name>           # measure
    - `throughput` (`-p 512 -n 128`) — tokens per second,
    - `thermal` (`-p 4096 -n 1024`) — real temperature and power draw;
 4. records the full hardware and software state (see METHODOLOGY);
-5. writes `report.md` and **appends a row to `results/INDEX.md`**.
+5. writes `report.md` and **appends a row to `results/all-benchmark-results.md`**.
 
 **Why two tests and not one.** A fast MoE model finishes the short test in **under a
 second** — telemetry sampled every 2 s has nothing to observe, and the report would show
@@ -83,11 +83,11 @@ VERDICT: OK (bielik-11b: report in 20260916-101500)
 Then:
 
 ```bash
-cat results/INDEX.md                    # growing table of ALL measurements
+cat results/all-benchmark-results.md                    # growing table of ALL measurements
 less results/<id>/report.md             # full report for one run
 ```
 
-`INDEX.md` is the reason this harness exists: **one table where every model you've ever
+`all-benchmark-results.md` is the reason this harness exists: **one table where every model you've ever
 measured sits beside the others, with its conditions.** Only compare rows with the same
 **power cap** and the same **llama.cpp commit** — otherwise you're comparing conditions,
 not models.
@@ -139,7 +139,7 @@ decision table → report in the agreed format.
 ### 4.4 Verify the agent before trusting it
 
 Before letting it loose on a new model, have it measure a model **you have already
-measured** and compare against `INDEX.md`. Agreement within a few percent means the agent
+measured** and compare against `all-benchmark-results.md`. Agreement within a few percent means the agent
 works. That costs one run and buys confidence in the next twenty.
 
 ---
