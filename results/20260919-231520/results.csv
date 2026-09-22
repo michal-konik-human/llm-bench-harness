@@ -1,0 +1,5 @@
+model,config,power_cap_w,test,n,mean_tok_s,min_tok_s,max_tok_s,spread_pct,peak_junction_c,peak_vram_c,peak_power_w,link_width,link_speed,llama_commit,rocm
+bielik-11b,throughput,210,pp512,3,2888.34,2879.78,2898.12,0.63,40,38,210,16,32.0 GT/s PCIe,987498f,7.2.4
+bielik-11b,throughput,210,tg128,3,45.08,45.07,45.08,0.02,40,38,210,16,32.0 GT/s PCIe,987498f,7.2.4
+bielik-11b,thermal,210,pp4096,3,2694.49,2692.06,2699.32,0.27,57,58,211,16,32.0 GT/s PCIe,987498f,7.2.4
+bielik-11b,thermal,210,tg1024,3,44.75,44.73,44.77,0.09,57,58,211,16,32.0 GT/s PCIe,987498f,7.2.4

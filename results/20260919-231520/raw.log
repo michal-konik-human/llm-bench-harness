@@ -1,0 +1,60 @@
+ggml_cuda_init: found 1 ROCm devices (Total VRAM: 32624 MiB):
+  Device 0: AMD Radeon AI PRO R9700, gfx1201 (0x1201), VMM: no, Wave Size: 32, VRAM: 32624 MiB
+| model                          |       size |     params | backend    | ngl |     sm |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | --------------: | -------------------: |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |           pp512 |       2879.78 ± 0.00 |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |           tg128 |         45.08 ± 0.00 |
+
+build: 987498f (1)
+
+----------------------------------------------------------------------
+ggml_cuda_init: found 1 ROCm devices (Total VRAM: 32624 MiB):
+  Device 0: AMD Radeon AI PRO R9700, gfx1201 (0x1201), VMM: no, Wave Size: 32, VRAM: 32624 MiB
+| model                          |       size |     params | backend    | ngl |     sm |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | --------------: | -------------------: |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |           pp512 |       2898.12 ± 0.00 |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |           tg128 |         45.08 ± 0.00 |
+
+build: 987498f (1)
+
+----------------------------------------------------------------------
+ggml_cuda_init: found 1 ROCm devices (Total VRAM: 32624 MiB):
+  Device 0: AMD Radeon AI PRO R9700, gfx1201 (0x1201), VMM: no, Wave Size: 32, VRAM: 32624 MiB
+| model                          |       size |     params | backend    | ngl |     sm |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | --------------: | -------------------: |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |           pp512 |       2887.12 ± 0.00 |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |           tg128 |         45.07 ± 0.00 |
+
+build: 987498f (1)
+
+----------------------------------------------------------------------
+ggml_cuda_init: found 1 ROCm devices (Total VRAM: 32624 MiB):
+  Device 0: AMD Radeon AI PRO R9700, gfx1201 (0x1201), VMM: no, Wave Size: 32, VRAM: 32624 MiB
+| model                          |       size |     params | backend    | ngl |     sm |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | --------------: | -------------------: |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |          pp4096 |       2699.32 ± 0.00 |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |          tg1024 |         44.77 ± 0.00 |
+
+build: 987498f (1)
+
+----------------------------------------------------------------------
+ggml_cuda_init: found 1 ROCm devices (Total VRAM: 32624 MiB):
+  Device 0: AMD Radeon AI PRO R9700, gfx1201 (0x1201), VMM: no, Wave Size: 32, VRAM: 32624 MiB
+| model                          |       size |     params | backend    | ngl |     sm |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | --------------: | -------------------: |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |          pp4096 |       2692.06 ± 0.00 |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |          tg1024 |         44.73 ± 0.00 |
+
+build: 987498f (1)
+
+----------------------------------------------------------------------
+ggml_cuda_init: found 1 ROCm devices (Total VRAM: 32624 MiB):
+  Device 0: AMD Radeon AI PRO R9700, gfx1201 (0x1201), VMM: no, Wave Size: 32, VRAM: 32624 MiB
+| model                          |       size |     params | backend    | ngl |     sm |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | --------------: | -------------------: |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |          pp4096 |       2692.10 ± 0.00 |
+| llama ?B Q8_0                  |  11.05 GiB |    11.17 B | ROCm       | 999 |   none |          tg1024 |         44.74 ± 0.00 |
+
+build: 987498f (1)
+
+----------------------------------------------------------------------

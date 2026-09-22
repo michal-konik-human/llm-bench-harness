@@ -1,0 +1,5 @@
+model,config,power_cap_w,test,n,mean_tok_s,min_tok_s,max_tok_s,spread_pct,peak_junction_c,peak_vram_c,peak_power_w,link_width,link_speed,llama_commit,rocm
+qwen3-32b,throughput,210,pp512,3,910.75,909.10,912.96,0.42,47,42,210,16,32.0 GT/s PCIe,987498f,7.2.4
+qwen3-32b,throughput,210,tg128,3,27.07,27.05,27.11,0.22,47,42,210,16,32.0 GT/s PCIe,987498f,7.2.4
+qwen3-32b,thermal,210,pp4096,3,844.32,842.46,846.78,0.51,66,68,214,16,32.0 GT/s PCIe,987498f,7.2.4
+qwen3-32b,thermal,210,tg1024,3,26.70,26.62,26.81,0.71,66,68,214,16,32.0 GT/s PCIe,987498f,7.2.4

@@ -1,0 +1,193 @@
+{
+  "run_id": "20260920-134642",
+  "config_name": "qwen3-32b-2gpu-layer",
+  "config_file": "manual TECHNIKA §9.4",
+  "environment": {
+    "timestamp": "2026-09-20 13:46:42 CEST",
+    "gpu_index": "0,1",
+    "gpu_bdf": "0000:03:00.0+0000:06:00.0",
+    "kernel": "7.0.0-31-generic",
+    "rocm": "7.2.4",
+    "llama_cpp_commit": "987498f",
+    "power_cap": 210,
+    "gpus": [
+      {
+        "index": 0,
+        "name": "AMD Radeon AI PRO R9700",
+        "gfx": "gfx1201",
+        "bdf": "0000:03:00.0",
+        "cus": 64
+      },
+      {
+        "index": 1,
+        "name": "AMD Radeon AI PRO R9700",
+        "gfx": "gfx1201",
+        "bdf": "0000:06:00.0",
+        "cus": 64
+      },
+      {
+        "index": 2,
+        "name": "AMD Radeon Graphics",
+        "gfx": "gfx1036",
+        "bdf": "0000:14:00.0",
+        "cus": 2
+      }
+    ],
+    "hardware": {
+      "cpu": "AMD Ryzen 7 9700X 8-Core Processor",
+      "ram_gb": 60.5,
+      "bios": "F13c",
+      "vram_mb": 65248
+    },
+    "software": {
+      "kernel": "7.0.0-31-generic",
+      "rocm": "7.2.4",
+      "llama_cpp_commit": "987498f",
+      "llama_cpp_commit_date": "2026-09-15",
+      "llama_cpp_build": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "GGML_CUDA": "OFF",
+        "GGML_HIP": "ON",
+        "GGML_VULKAN": "OFF",
+        "GPU_TARGETS": "gfx1201"
+      },
+      "gpu_driver": "amdgpu"
+    },
+    "gpu_consumers_at_start": [],
+    "aer_before": {
+      "correctable": 0,
+      "nonfatal": 0,
+      "fatal": 0
+    },
+    "ecc_before": {
+      "correctable": 0,
+      "uncorrectable": 0
+    },
+    "aer_after": {
+      "correctable": 0,
+      "nonfatal": 0,
+      "fatal": 0
+    },
+    "ecc_after": {
+      "correctable": 0,
+      "uncorrectable": 0
+    },
+    "note": "PCIe width read from CPU parent ports 0000:00:01.1 and 0000:00:01.4 under load (not from the card's internal switch)."
+  },
+  "settings": {
+    "runs": 3,
+    "cooldown_s": 0,
+    "temp_limit_c": null
+  },
+  "configs_used": [
+    {
+      "name": "2gpu-layer",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "--split-mode",
+        "layer",
+        "--tensor-split",
+        "1/1",
+        "-p",
+        "512",
+        "-n",
+        "128",
+        "-r",
+        "1"
+      ],
+      "power_cap_w": 210
+    }
+  ],
+  "cells": [
+    {
+      "model": "qwen3-32b",
+      "config": "2gpu-layer",
+      "model_path": "~/models/qwen3-32b/Qwen_Qwen3-32B-Q4_K_M.gguf",
+      "power_cap_w": 210,
+      "runs": [
+        {
+          "results": {
+            "pp512": {
+              "tok_s": 946.82,
+              "sd": 0.0
+            },
+            "tg128": {
+              "tok_s": 27.76,
+              "sd": 0.0
+            }
+          },
+          "peak": {
+            "junction_c": null,
+            "vram_c": null,
+            "power_w": null,
+            "fan_rpm": null
+          },
+          "samples": 0,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "8",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": true,
+          "telemetry": "not sampled — manual llama-bench, three separate processes"
+        },
+        {
+          "results": {
+            "pp512": {
+              "tok_s": 953.22,
+              "sd": 0.0
+            },
+            "tg128": {
+              "tok_s": 27.76,
+              "sd": 0.0
+            }
+          },
+          "peak": {
+            "junction_c": null,
+            "vram_c": null,
+            "power_w": null,
+            "fan_rpm": null
+          },
+          "samples": 0,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "8",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": true,
+          "telemetry": "not sampled — manual llama-bench, three separate processes"
+        },
+        {
+          "results": {
+            "pp512": {
+              "tok_s": 950.8,
+              "sd": 0.0
+            },
+            "tg128": {
+              "tok_s": 27.77,
+              "sd": 0.0
+            }
+          },
+          "peak": {
+            "junction_c": null,
+            "vram_c": null,
+            "power_w": null,
+            "fan_rpm": null
+          },
+          "samples": 0,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "8",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": true,
+          "telemetry": "not sampled — manual llama-bench, three separate processes"
+        }
+      ]
+    }
+  ]
+}
