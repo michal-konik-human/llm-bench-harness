@@ -267,6 +267,71 @@ def build_config(name, path, quick):
     }
 
 
+def _arg_after(args, names):
+    names = {names} if isinstance(names, str) else set(names)
+    for i, a in enumerate(args):
+        if a in names and i + 1 < len(args):
+            return str(args[i + 1])
+    return None
+
+
+def hardware_used(rec, cell):
+    """Which cards and split the cell actually ran on — not the inventory of the box."""
+    env = rec.get("environment") or {}
+    cfg = next((c for c in rec.get("configs_used") or []
+                if c.get("name") == cell.get("config")), None)
+    if cfg is None and rec.get("configs_used"):
+        cfg = rec["configs_used"][0]
+    cfg = cfg or {}
+    args = [str(a) for a in (cfg.get("args") or [])]
+    hip = str((cfg.get("env") or {}).get("HIP_VISIBLE_DEVICES",
+                                         env.get("gpu_index", 0)))
+    idxs = []
+    for part in hip.split(","):
+        part = part.strip()
+        if part.isdigit():
+            idxs.append(int(part))
+    if not idxs:
+        idxs = [int(env.get("gpu_index") or 0)]
+        hip = str(idxs[0])
+    by_idx = {g.get("index"): g for g in (env.get("gpus") or [])
+              if isinstance(g, dict)}
+    labels = []
+    for i in idxs:
+        g = by_idx.get(i) or {}
+        name = str(g.get("name") or "")
+        if "R9700" in name:
+            labels.append("R9700")
+        elif "Radeon Graphics" in name or str(g.get("gfx") or "").startswith("gfx103"):
+            labels.append("iGPU")
+        else:
+            labels.append(str(g.get("gfx") or name or i))
+    if labels and all(x == labels[0] for x in labels):
+        gpus = f"{len(labels)}×{labels[0]} ({hip})"
+    else:
+        gpus = f"{'+'.join(labels)} ({hip})"
+    sm = _arg_after(args, ("-sm", "--split-mode")) or "none"
+    ts = _arg_after(args, ("-ts", "--tensor-split"))
+    split = f"{sm} {ts}" if ts else sm
+    link = "—"
+    for r in cell.get("runs") or []:
+        lu = r.get("link_under_load") or {}
+        w, s = lu.get("width"), lu.get("speed")
+        if w:
+            link = f"x{w}" + (f" {s}" if s else "")
+            break
+    return gpus, split, link
+
+
+def _peak_num(runs, key):
+    vals = []
+    for r in runs:
+        v = (r.get("peak") or {}).get(key)
+        if isinstance(v, (int, float)):
+            vals.append(v)
+    return max(vals) if vals else None
+
+
 def latest_result_dir(before):
     dirs = {p for p in RESULTS.glob("*") if (p / "results.json").exists()}
     new = dirs - before
@@ -292,8 +357,9 @@ def summarise_result(outdir):
             worst = "INVALID"
             lines.append(f"  {cell['model']}/{cell['config']}: NO RESULT")
             continue
-        pj = max((r["peak"]["junction_c"] for r in cell["runs"]), default=0)
-        pw = max((r["peak"]["power_w"] for r in cell["runs"]), default=0)
+        pj = _peak_num(cell["runs"], "junction_c")
+        pw = _peak_num(cell["runs"], "power_w")
+        gpus, split, pcie = hardware_used(rec, cell)
         for test, vals in per.items():
             mean = sum(vals) / len(vals)
             spread = (max(vals) - min(vals)) / mean * 100 if mean else 0
@@ -304,14 +370,17 @@ def summarise_result(outdir):
             if isinstance(pj, (int, float)) and pj >= 85:
                 note += "  <-- junction>=85C: measuring cooling"
                 worst = "WITH_CAVEAT" if worst == "OK" else worst
+            jtxt = f"{pj}C" if pj is not None else "n/a"
+            wtxt = f"{pw}W" if pw is not None else "n/a"
             lines.append(f"  {cell['model']}/{cell['config']} {test}: "
                          f"{mean:.2f} tok/s (spread {spread:.1f}%, "
-                         f"peak junction {pj}C, {pw}W){note}")
+                         f"peak junction {jtxt}, {wtxt}){note}")
             index_rows.append({
                 "model": cell["model"], "config": cell["config"], "test": test,
                 "mean": mean, "spread": spread, "junction": pj, "power": pw,
                 "cap": cell.get("power_cap_w"), "run_id": rec["run_id"],
                 "commit": env.get("llama_cpp_commit"), "rocm": env.get("rocm"),
+                "gpus": gpus, "split": split, "pcie": pcie,
             })
 
     drift = [k for k in env.get("aer_before", {})
@@ -326,26 +395,38 @@ def summarise_result(outdir):
     return worst, lines, index_rows
 
 
+def _fmt_peak(val, unit):
+    return f"{val} {unit}" if isinstance(val, (int, float)) else "—"
+
+
 def append_index(rows):
     header = (
-        "# Measurement index — every model measured\n\n"
-        "Appended automatically by `bench-model`. Newest at the bottom.\n\n"
+        "# All benchmark results — every model measured, with its conditions\n\n"
+        "Appended automatically by `bench-model` (or rebuilt with `--reindex`). "
+        "Newest at the bottom.\n\n"
         "`spread` is the difference between the best and worst independent run.\n"
         "Above 10 % indicates bimodality — the mean in this table is then misleading\n"
         "and you should open that run's `report.md`.\n\n"
-        "**Only compare rows with the same power cap and the same llama.cpp commit.**\n"
-        "Otherwise you are comparing conditions, not models.\n\n"
-        "| run_id | model | config | test | tok/s | spread | junction | power | cap | llama.cpp | ROCm |\n"
-        "|---|---|---|---|---:|---:|---:|---:|---:|---|---|\n"
+        "`GPUs` is what the run actually used (`HIP_VISIBLE_DEVICES` + split), "
+        "not the inventory of the machine. `PCIe` is the link sampled under load.\n\n"
+        "**Only compare rows with the same power cap, the same llama.cpp commit, "
+        "and the same GPU/split.** Otherwise you are comparing conditions, not models.\n\n"
+        "| run_id | model | config | test | tok/s | spread | junction | power | cap | GPUs | split | PCIe | llama.cpp | ROCm |\n"
+        "|---|---|---|---|---:|---:|---:|---:|---:|---|---|---|---|---|\n"
     )
     if not INDEX.exists():
         INDEX.parent.mkdir(parents=True, exist_ok=True)
         INDEX.write_text(header, encoding="utf-8")
     with INDEX.open("a", encoding="utf-8") as fh:
         for r in rows:
-            fh.write(f"| {r['run_id']} | {r['model']} | {r['config']} | {r['test']} "
-                     f"| {r['mean']:.2f} | {r['spread']:.1f}% | {r['junction']} °C "
-                     f"| {r['power']} W | {r['cap']} | `{r['commit']}` | {r['rocm']} |\n")
+            fh.write(
+                f"| {r['run_id']} | {r['model']} | {r['config']} | {r['test']} "
+                f"| {r['mean']:.2f} | {r['spread']:.1f}% "
+                f"| {_fmt_peak(r['junction'], '°C')} "
+                f"| {_fmt_peak(r['power'], 'W')} | {r['cap']} "
+                f"| {r.get('gpus', '—')} | {r.get('split', '—')} | {r.get('pcie', '—')} "
+                f"| `{r['commit']}` | {r['rocm']} |\n"
+            )
 
 
 def rebuild_index():
@@ -366,8 +447,9 @@ def rebuild_index():
             for r in cell["runs"]:
                 for test, v in (r.get("results") or {}).items():
                     per.setdefault(test, []).append(v["tok_s"])
-            pj = max((r["peak"]["junction_c"] for r in cell["runs"]), default=0)
-            pw = max((r["peak"]["power_w"] for r in cell["runs"]), default=0)
+            pj = _peak_num(cell["runs"], "junction_c")
+            pw = _peak_num(cell["runs"], "power_w")
+            gpus, split, pcie = hardware_used(rec, cell)
             for test, vals in per.items():
                 mean = sum(vals) / len(vals)
                 rows.append({
@@ -377,6 +459,7 @@ def rebuild_index():
                     "junction": pj, "power": pw, "cap": cell.get("power_cap_w"),
                     "run_id": rec.get("run_id", "?"),
                     "commit": env.get("llama_cpp_commit"), "rocm": env.get("rocm"),
+                    "gpus": gpus, "split": split, "pcie": pcie,
                 })
     append_index(rows)
     print(f"Index rebuilt: {len(rows)} rows from "

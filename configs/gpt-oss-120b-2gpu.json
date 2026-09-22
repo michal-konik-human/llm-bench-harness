@@ -1,0 +1,30 @@
+{
+  "name": "gpt-oss-120b-2gpu",
+  "_comment": "gpt-oss-120b MXFP4 on both R9700s. HIP_VISIBLE_DEVICES=0,1 is the two discrete cards; index 2 is the iGPU and must stay out. NCCL_PROTO=Simple and NCCL_P2P_DISABLE=1 are required on this host (see multi-gpu-EXAMPLE.json). Two tests match bench-model: short for throughput, long for thermals. Power cap is left at whatever is currently set.",
+  "runs": 3,
+  "cooldown_s": 60,
+  "temp_limit_c": 95,
+  "models": [
+    { "name": "gpt-oss-120b", "path": "~/models/gpt-oss-120b/gpt-oss-120b-MXFP4.gguf" }
+  ],
+  "configs": [
+    {
+      "name": "throughput",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1",
+        "NCCL_PROTO": "Simple",
+        "NCCL_P2P_DISABLE": "1"
+      },
+      "args": ["-ngl", "999", "-sm", "layer", "-ts", "1,1", "-p", "512", "-n", "128"]
+    },
+    {
+      "name": "thermal",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1",
+        "NCCL_PROTO": "Simple",
+        "NCCL_P2P_DISABLE": "1"
+      },
+      "args": ["-ngl", "999", "-sm", "layer", "-ts", "1,1", "-p", "4096", "-n", "1024"]
+    }
+  ]
+}

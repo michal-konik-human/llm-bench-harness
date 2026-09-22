@@ -1,0 +1,23 @@
+# All benchmark results — every model measured, with its conditions
+
+Appended automatically by `bench-model`. Newest at the bottom.
+
+`spread` is the difference between the best and worst independent run.
+Above 10 % indicates bimodality — the mean in this table is then misleading
+and you should open that run's `report.md`.
+
+**Only compare rows with the same power cap and the same llama.cpp commit.**
+Otherwise you are comparing conditions, not models.
+
+| run_id | model | config | test | tok/s | spread | junction | power | cap | llama.cpp | ROCm |
+|---|---|---|---|---:|---:|---:|---:|---:|---|---|
+| 20260915-164813 | gpt-oss-20b | throughput | pp512 | 6038.74 | 0.6% | 30 °C | 19 W | 300 | `987498f` | 7.2.4 |
+| 20260915-164813 | gpt-oss-20b | throughput | tg128 | 149.72 | 0.2% | 30 °C | 19 W | 300 | `987498f` | 7.2.4 |
+| 20260919-225407 | qwen3-32b | throughput | pp512 | 910.75 | 0.4% | 47 °C | 210 W | 210 | `987498f` | 7.2.4 |
+| 20260919-225407 | qwen3-32b | throughput | tg128 | 27.07 | 0.2% | 47 °C | 210 W | 210 | `987498f` | 7.2.4 |
+| 20260919-225407 | qwen3-32b | thermal | pp4096 | 844.32 | 0.5% | 66 °C | 214 W | 210 | `987498f` | 7.2.4 |
+| 20260919-225407 | qwen3-32b | thermal | tg1024 | 26.70 | 0.7% | 66 °C | 214 W | 210 | `987498f` | 7.2.4 |
+| 20260919-231520 | bielik-11b | throughput | pp512 | 2888.34 | 0.6% | 40 °C | 210 W | 210 | `987498f` | 7.2.4 |
+| 20260919-231520 | bielik-11b | throughput | tg128 | 45.08 | 0.0% | 40 °C | 210 W | 210 | `987498f` | 7.2.4 |
+| 20260919-231520 | bielik-11b | thermal | pp4096 | 2694.49 | 0.3% | 57 °C | 211 W | 210 | `987498f` | 7.2.4 |
+| 20260919-231520 | bielik-11b | thermal | tg1024 | 44.75 | 0.1% | 57 °C | 211 W | 210 | `987498f` | 7.2.4 |

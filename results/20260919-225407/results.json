@@ -1,0 +1,287 @@
+{
+  "run_id": "20260919-225407",
+  "config_name": "new-model-qwen3-32b",
+  "config_file": "/tmp/bench-model-qwen3-32b.json",
+  "environment": {
+    "timestamp": "2026-09-19 22:54:07 CEST",
+    "gpu_index": 0,
+    "gpu_bdf": "0000:03:00.0",
+    "kernel": "7.0.0-31-generic",
+    "rocm": "7.2.4",
+    "llama_cpp_commit": "987498f",
+    "power_cap": 210,
+    "gpus": [
+      {
+        "index": 0,
+        "name": "AMD Radeon AI PRO R9700",
+        "gfx": "gfx1201",
+        "bdf": "0000:03:00.0",
+        "cus": 64
+      },
+      {
+        "index": 1,
+        "name": "AMD Radeon AI PRO R9700",
+        "gfx": "gfx1201",
+        "bdf": "0000:06:00.0",
+        "cus": 64
+      },
+      {
+        "index": 2,
+        "name": "AMD Radeon Graphics",
+        "gfx": "gfx1036",
+        "bdf": "0000:14:00.0",
+        "cus": 2
+      }
+    ],
+    "hardware": {
+      "cpu": "AMD Ryzen 7 9700X 8-Core Processor",
+      "ram_gb": 60.5,
+      "ram_configured_speed": null,
+      "bios": "F13c",
+      "vram_mb": 32624
+    },
+    "software": {
+      "kernel": "7.0.0-31-generic",
+      "kernel_cmdline": "BOOT_IMAGE=/boot/vmlinuz-7.0.0-31-generic root=UUID=2177f55b-d49b-4b63-b447-4b5d00d2e414 ro quiet splash vt.handoff=7",
+      "rocm": "7.2.4",
+      "llama_cpp_commit": "987498f",
+      "llama_cpp_commit_date": "2026-09-15",
+      "llama_cpp_build": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "GGML_CUDA": "OFF",
+        "GGML_HIP": "ON",
+        "GGML_VULKAN": "OFF",
+        "GPU_TARGETS": "gfx1201"
+      },
+      "gpu_driver": "amdgpu"
+    },
+    "gpu_consumers_at_start": [],
+    "aer_before": {
+      "correctable": 0,
+      "nonfatal": 0,
+      "fatal": 0
+    },
+    "ecc_before": {
+      "correctable": 0,
+      "uncorrectable": 0
+    },
+    "aer_after": {
+      "correctable": 0,
+      "nonfatal": 0,
+      "fatal": 0
+    },
+    "ecc_after": {
+      "correctable": 0,
+      "uncorrectable": 0
+    }
+  },
+  "settings": {
+    "runs": 3,
+    "cooldown_s": 45,
+    "temp_limit_c": 95
+  },
+  "configs_used": [
+    {
+      "name": "throughput",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "none",
+        "-p",
+        "512",
+        "-n",
+        "128"
+      ],
+      "power_cap_w": null
+    },
+    {
+      "name": "thermal",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "none",
+        "-p",
+        "4096",
+        "-n",
+        "1024"
+      ],
+      "power_cap_w": null
+    }
+  ],
+  "cells": [
+    {
+      "model": "qwen3-32b",
+      "config": "throughput",
+      "model_path": "~/models/qwen3-32b/Qwen_Qwen3-32B-Q4_K_M.gguf",
+      "power_cap_w": 210,
+      "runs": [
+        {
+          "results": {
+            "pp512": {
+              "tok_s": 910.2,
+              "sd": 0.0
+            },
+            "tg128": {
+              "tok_s": 27.11,
+              "sd": 0.0
+            }
+          },
+          "peak": {
+            "junction_c": 44,
+            "vram_c": 40,
+            "power_w": 210,
+            "fan_rpm": 1874
+          },
+          "samples": 4,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": true
+        },
+        {
+          "results": {
+            "pp512": {
+              "tok_s": 909.1,
+              "sd": 0.0
+            },
+            "tg128": {
+              "tok_s": 27.05,
+              "sd": 0.0
+            }
+          },
+          "peak": {
+            "junction_c": 46,
+            "vram_c": 42,
+            "power_w": 210,
+            "fan_rpm": 1870
+          },
+          "samples": 4,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": true
+        },
+        {
+          "results": {
+            "pp512": {
+              "tok_s": 912.96,
+              "sd": 0.0
+            },
+            "tg128": {
+              "tok_s": 27.05,
+              "sd": 0.0
+            }
+          },
+          "peak": {
+            "junction_c": 47,
+            "vram_c": 42,
+            "power_w": 210,
+            "fan_rpm": 1863
+          },
+          "samples": 4,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": true
+        }
+      ]
+    },
+    {
+      "model": "qwen3-32b",
+      "config": "thermal",
+      "model_path": "~/models/qwen3-32b/Qwen_Qwen3-32B-Q4_K_M.gguf",
+      "power_cap_w": 210,
+      "runs": [
+        {
+          "results": {
+            "pp4096": {
+              "tok_s": 846.78,
+              "sd": 0.0
+            },
+            "tg1024": {
+              "tok_s": 26.81,
+              "sd": 0.0
+            }
+          },
+          "peak": {
+            "junction_c": 61,
+            "vram_c": 62,
+            "power_w": 212,
+            "fan_rpm": 2109
+          },
+          "samples": 24,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": true
+        },
+        {
+          "results": {
+            "pp4096": {
+              "tok_s": 843.71,
+              "sd": 0.0
+            },
+            "tg1024": {
+              "tok_s": 26.68,
+              "sd": 0.0
+            }
+          },
+          "peak": {
+            "junction_c": 65,
+            "vram_c": 66,
+            "power_w": 210,
+            "fan_rpm": 2108
+          },
+          "samples": 25,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": true
+        },
+        {
+          "results": {
+            "pp4096": {
+              "tok_s": 842.46,
+              "sd": 0.0
+            },
+            "tg1024": {
+              "tok_s": 26.62,
+              "sd": 0.0
+            }
+          },
+          "peak": {
+            "junction_c": 66,
+            "vram_c": 68,
+            "power_w": 214,
+            "fan_rpm": 2110
+          },
+          "samples": 25,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": true
+        }
+      ]
+    }
+  ]
+}
