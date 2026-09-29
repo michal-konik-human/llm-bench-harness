@@ -1,0 +1,248 @@
+{
+  "run_id": "20260928-221827",
+  "config_name": "gpt-oss-120b-3gpu",
+  "config_file": "/home/mkoniu/Desktop/github_repos/llm-bench-harness/configs/gpt-oss-120b-3gpu.json",
+  "environment": {
+    "timestamp": "2026-09-28 22:18:27 CEST",
+    "gpu_index": 0,
+    "gpu_bdf": "0000:03:00.0",
+    "kernel": "7.0.0-34-generic",
+    "rocm": "7.2.4",
+    "llama_cpp_commit": "987498f",
+    "power_cap": 300,
+    "gpus": [
+      {
+        "index": 0,
+        "name": "AMD Radeon AI PRO R9700",
+        "gfx": "gfx1201",
+        "bdf": "0000:03:00.0",
+        "cus": 64
+      },
+      {
+        "index": 1,
+        "name": "AMD Radeon AI PRO R9700",
+        "gfx": "gfx1201",
+        "bdf": "0000:06:00.0",
+        "cus": 64
+      },
+      {
+        "index": 2,
+        "name": "AMD Radeon AI PRO R9700",
+        "gfx": "gfx1201",
+        "bdf": "0000:09:00.0",
+        "cus": 64
+      },
+      {
+        "index": 3,
+        "name": "AMD Radeon Graphics",
+        "gfx": "gfx1036",
+        "bdf": "0000:17:00.0",
+        "cus": 2
+      }
+    ],
+    "hardware": {
+      "cpu": "AMD Ryzen 7 9700X 8-Core Processor",
+      "ram_gb": 60.5,
+      "ram_configured_speed": null,
+      "bios": "F13c",
+      "vram_mb": 32624
+    },
+    "software": {
+      "kernel": "7.0.0-34-generic",
+      "kernel_cmdline": "BOOT_IMAGE=/boot/vmlinuz-7.0.0-34-generic root=UUID=2177f55b-d49b-4b63-b447-4b5d00d2e414 ro quiet splash vt.handoff=7",
+      "rocm": "7.2.4",
+      "llama_cpp_commit": "987498f",
+      "llama_cpp_commit_date": "2026-09-15",
+      "llama_cpp_build": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "GGML_CUDA": "OFF",
+        "GGML_HIP": "ON",
+        "GGML_VULKAN": "OFF",
+        "GPU_TARGETS": "gfx1201"
+      },
+      "gpu_driver": "amdgpu"
+    },
+    "gpu_consumers_at_start": [],
+    "aer_before": {
+      "correctable": 0,
+      "nonfatal": 0,
+      "fatal": 0
+    },
+    "ecc_before": {
+      "correctable": 0,
+      "uncorrectable": 0
+    },
+    "aer_after": {
+      "correctable": 0,
+      "nonfatal": 0,
+      "fatal": 0
+    },
+    "ecc_after": {
+      "correctable": 0,
+      "uncorrectable": 0
+    }
+  },
+  "settings": {
+    "runs": 3,
+    "cooldown_s": 60,
+    "temp_limit_c": 95
+  },
+  "configs_used": [
+    {
+      "name": "throughput",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1,2",
+        "NCCL_PROTO": "Simple",
+        "NCCL_P2P_DISABLE": "1"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1,1,1",
+        "-p",
+        "512",
+        "-n",
+        "128"
+      ],
+      "power_cap_w": null
+    },
+    {
+      "name": "thermal",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1,2",
+        "NCCL_PROTO": "Simple",
+        "NCCL_P2P_DISABLE": "1"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1,1,1",
+        "-p",
+        "4096",
+        "-n",
+        "1024"
+      ],
+      "power_cap_w": null
+    }
+  ],
+  "cells": [
+    {
+      "model": "gpt-oss-120b",
+      "config": "throughput",
+      "model_path": "~/models/gpt-oss-120b/gpt-oss-120b-MXFP4.gguf",
+      "power_cap_w": 300,
+      "runs": [
+        {
+          "results": {},
+          "peak": {
+            "junction_c": 27,
+            "vram_c": 28,
+            "power_w": 29,
+            "fan_rpm": 1799
+          },
+          "samples": 19,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": false
+        },
+        {
+          "results": {},
+          "peak": {
+            "junction_c": 28,
+            "vram_c": 28,
+            "power_w": 21,
+            "fan_rpm": 1799
+          },
+          "samples": 14,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": false
+        },
+        {
+          "results": {},
+          "peak": {
+            "junction_c": 28,
+            "vram_c": 28,
+            "power_w": 21,
+            "fan_rpm": 1798
+          },
+          "samples": 11,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": false
+        }
+      ]
+    },
+    {
+      "model": "gpt-oss-120b",
+      "config": "thermal",
+      "model_path": "~/models/gpt-oss-120b/gpt-oss-120b-MXFP4.gguf",
+      "power_cap_w": 300,
+      "runs": [
+        {
+          "results": {},
+          "peak": {
+            "junction_c": 27,
+            "vram_c": 26,
+            "power_w": 17,
+            "fan_rpm": 1799
+          },
+          "samples": 7,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": false
+        },
+        {
+          "results": {},
+          "peak": {
+            "junction_c": 27,
+            "vram_c": 28,
+            "power_w": 16,
+            "fan_rpm": 1797
+          },
+          "samples": 5,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": false
+        },
+        {
+          "results": {},
+          "peak": {
+            "junction_c": 27,
+            "vram_c": 26,
+            "power_w": 14,
+            "fan_rpm": 1798
+          },
+          "samples": 4,
+          "aborted_at_c": null,
+          "link_under_load": {
+            "width": "16",
+            "speed": "32.0 GT/s PCIe"
+          },
+          "ok": false
+        }
+      ]
+    }
+  ]
+}

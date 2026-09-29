@@ -1,0 +1,22 @@
+{
+  "name": "laguna-s-2.1-3gpu",
+  "_comment": "Poolside Laguna S 2.1 (118B total, 8B active MoE), UD-Q4_K_XL (~69 GiB on disk) across all three R9700s. --load-mode dio required (see TECHNIKA.md P16 / radeon-r9700-rocm-notes/findings/rocm-mmap-load-hang.md) -- this file is well over the ~50GiB threshold that hangs on the default mmap path.",
+  "runs": 3,
+  "cooldown_s": 60,
+  "temp_limit_c": 95,
+  "models": [
+    { "name": "laguna-s-2.1", "path": "~/models/laguna-s-2.1/UD-Q4_K_XL/Laguna-S-2.1-UD-Q4_K_XL-00001-of-00003.gguf" }
+  ],
+  "configs": [
+    {
+      "name": "throughput",
+      "env": { "HIP_VISIBLE_DEVICES": "0,1,2" },
+      "args": ["-ngl", "999", "-sm", "layer", "-ts", "1,1,1", "--load-mode", "dio", "-p", "512", "-n", "128"]
+    },
+    {
+      "name": "thermal",
+      "env": { "HIP_VISIBLE_DEVICES": "0,1,2" },
+      "args": ["-ngl", "999", "-sm", "layer", "-ts", "1,1,1", "--load-mode", "dio", "-p", "4096", "-n", "1024"]
+    }
+  ]
+}

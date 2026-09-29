@@ -1,0 +1,1 @@
+model,config,power_cap_w,test,n,mean_tok_s,min_tok_s,max_tok_s,spread_pct,peak_junction_c,peak_vram_c,peak_power_w,link_width,link_speed,llama_commit,rocm
