@@ -30,12 +30,30 @@ and you should open that run's `report.md`.
 | 20260920-1540 | gpt-oss-20b | 2gpu-manual | tg128 | 145.28 | 0.3%* | — | — | 210 | 2×R9700 (0,1) | layer auto | x8 32.0 GT/s PCIe | `987498f` | 7.2.4 |
 | 20260928-2300 | gpt-oss-120b | 3gpu-manual | pp512 | 194.13 | 1.1%* | not sampled | not sampled | 300 | 3×R9700 (0,1,2) | layer 1/1/1 | x8 32.0 GT/s PCIe | `680a036` | 7.2.4 |
 | 20260928-2300 | gpt-oss-120b | 3gpu-manual | tg128 | 94.30 | 4.3%* | not sampled | not sampled | 300 | 3×R9700 (0,1,2) | layer 1/1/1 | x8 32.0 GT/s PCIe | `680a036` | 7.2.4 |
+| 20260929-0930 | laguna-s-2.1 | 3gpu-manual | pp512 | 125.27 | 0.8%* | 51 °C† | 155 W† | 300 | 3×R9700 (0,1,2) | layer 1/1/1 | x8 32.0 GT/s PCIe | `680a036` | 7.2.4 |
+| 20260929-0930 | laguna-s-2.1 | 3gpu-manual | tg128 | 49.07 | 0.2%* | 51 °C† | 155 W† | 300 | 3×R9700 (0,1,2) | layer 1/1/1 | x8 32.0 GT/s PCIe | `680a036` | 7.2.4 |
+| 20260929-0930 | laguna-s-2.1 | 3gpu-manual | thermal (pp4096/tg1024) | 128.4 / 44.1 | n/a (1 run) | 51 °C† | 155 W† | 300 | 3×R9700 (0,1,2) | layer 1/1/1 | x8 32.0 GT/s PCIe | `680a036` | 7.2.4 |
+| 20260929-0945 | qwen3-235b-a22b | 3gpu-manual | pp512 | 41.70 | 2.4%* | 63 °C† | 172 W† | 300 | 3×R9700 (0,1,2) | layer 1/1/1 | x8 32.0 GT/s PCIe | `680a036` | 7.2.4 |
+| 20260929-0945 | qwen3-235b-a22b | 3gpu-manual | tg128 | 31.40 | 0.0%* | 63 °C† | 172 W† | 300 | 3×R9700 (0,1,2) | layer 1/1/1 | x8 32.0 GT/s PCIe | `680a036` | 7.2.4 |
+| 20260929-0945 | qwen3-235b-a22b | 3gpu-manual | thermal (pp4096/tg1024) | 50.7 / 31.3 | n/a (1 run) | 63 °C† | 172 W† | 300 | 3×R9700 (0,1,2) | layer 1/1/1 | x8 32.0 GT/s PCIe | `680a036` | 7.2.4 |
 
 \* Rows marked `2gpu-manual` / `3gpu-manual` came from a direct `llama-cli`/`llama-bench` call,
 not from `bench-model`. They use separate OS processes (three runs, `pp512`/`tg128` prompt
-lengths) but no `bench.py` telemetry sampling, so junction/power are not recorded. Treat them
-as indicative; re-run through `bench.py` once its `--load-mode` bug (see below) is fixed
-upstream, before quoting them anywhere more formal.
+lengths) but no `bench.py` telemetry sampling, so junction/power are not recorded (unless
+marked † — see below). Treat them as indicative; re-run through `bench.py` once its
+`--load-mode` bug (see below) is fixed upstream, before quoting them anywhere more formal.
+
+† For `laguna-s-2.1` and `qwen3-235b-a22b`, junction/power were manually sampled via
+`amd-smi metric --temperature --power` at ~10 s intervals during the separate thermal run
+(one process, `-p 4096 -n 1024`), not continuously instrumented like `bench.py`'s built-in
+sampling — treat as a coarse peak, not an exact maximum. Both stayed far below the 95 °C
+guard and the 300 W cap.
+
+⚠️ **`qwen3-235b-a22b` is the tightest VRAM fit run on this rig to date.** UD-Q2_K_XL
+weights alone are ~83 GiB of the 96 GiB total across 3 cards, leaving only ~10-13 GiB for
+KV-cache and compute buffers. It loaded and ran without OOM at the modest context implied
+by `-p 512/4096` (≤ ~5.1K tokens), but a much longer context has not been tested and may
+not fit — see the `--ctx-size 4096` note in `llama-swap`'s config for this model.
 
 ## Models that did NOT produce a result
 
@@ -52,3 +70,10 @@ more than one GPU is visible (`HIP_VISIBLE_DEVICES=0,1` or `0,1,2`), regardless 
 isolated — likely a bug specific to `llama-bench`'s own load path, not `llama_model_load()`
 itself. Until fixed, use `llama-cli` directly for multi-GPU + `dio` + large-model
 measurements (see the `3gpu-manual` rows above) rather than `bench.py`.
+
+**Confirmed again 2026-09-29** on two more, unrelated models (`laguna-s-2.1`,
+`qwen3-235b-a22b`) — same instant `error: failed to load model`, same 3-GPU + `dio`
+combination, still nothing when only one GPU is visible. This is not specific to
+`gpt-oss-120b` or its architecture; it looks like a general property of `llama-bench` +
+`--load-mode dio` + `HIP_VISIBLE_DEVICES` with more than one entry, independent of which
+model is being loaded. Still not reported upstream as of this date — worth filing.
