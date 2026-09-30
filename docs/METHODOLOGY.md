@@ -73,7 +73,11 @@ spread is more important than the mean here.
 ## Why the power cap is a condition, not a detail
 
 The card here has a stock limit of **300 W** and a firmware **floor of 210 W** — 200 W is
-simply not settable, `amd-smi` rejects it.
+simply not settable, `amd-smi` rejects it. With amdgpu *overdrive* enabled
+(`amdgpu.ppfeaturemask` bit 0x4000, needed for fan-curve control) the ceiling rises to
+**330 W**. The machine's standing setting since 30 Sep 2026 is **250 W** per card
+(`gpu-tuning.service`); a config's `power_cap_w` overrides it for that config only and is
+restored afterwards.
 
 Measurement showed that **a dense model holds the card at 300 W continuously**, with
 junction temperature climbing the whole time: 64 °C → 73 °C → 79 °C → 83 °C over 60
@@ -87,20 +91,78 @@ cap with every number, and `configs/power-cap.json` measures the difference dire
 
 ---
 
-## Why PCIe link width is in the report
+## Why PCIe link width is in the report — and where to read it
 
-Today a single card in the top slot gets **x16 Gen5**. Add a second card and the board
-splits the lanes automatically — the first card drops to **x8**. That's expected, not a
-fault.
+With one card in the top slot it gets **x16 Gen5**. Add a second card and the board splits
+the lanes automatically (x8 + x8); cards on M.2 adapters get **x4**. On the 4-card build
+the measured links are **x8 / x4 / x8 / x4, all Gen5**.
 
 Link width barely affects decode (weights are loaded into VRAM once and stay there), but
-it **does** affect model load time and prefill when part of the model lives in host RAM.
-So it must be recorded with every result — so that when you add the second card, the cost
-of x16→x8 is **measured rather than assumed**.
+it **does** affect model load time, prefill when anything lives in host RAM, and every
+hand-off between cards in a multi-GPU split. So it is recorded with every result — the
+cost of x16 → x8 → x4 is **measured rather than assumed**.
 
-**The trap:** at idle the link downtrains to **2.5 GT/s** to save power. The reading is
-only meaningful **under load**, which is why the harness samples it while the GPU is busy
-(`gfx_activity > 50%`).
+**Trap 1 — the endpoint lies.** A Radeon AI PRO R9700 carries its **own PCIe switch**:
+root port → switch upstream port → switch downstream port → GPU. The GPU endpoint always
+reports **x16** at full speed, because it talks to that switch. The slot link is further
+up. The harness walks the whole path in sysfs and records the **bottleneck** (narrowest,
+slowest link) for each GPU. Results from before 30 Sep 2026 recorded the endpoint and say
+x16 for every card; the table marks them `(endpoint)`.
+
+**Trap 2 — idle downtraining.** At idle the link downtrains to save power, so the reading
+is only meaningful **under load**; the harness samples it while each GPU is busy and marks
+an idle reading `(idle)`.
+
+---
+
+## Multiple GPUs — what changes in the measurement
+
+- **Which cards:** taken from the config's `HIP_VISIBLE_DEVICES` and mapped HIP index →
+  PCI address → `amd-smi` index (HIP numbering comes from `rocminfo`; nothing guarantees
+  it equals `amd-smi`'s). The integrated GPU is refused — it would produce a plausible
+  number ~10× too low.
+- **Everything covers every card:** telemetry, the thermal guard (junction **and** VRAM),
+  ECC/AER before and after (including the links above each card), exclusivity, power caps.
+  The old harness watched only GPU 0 — on a 4-card run a hot GPU 3 could not stop it.
+- **Per-card power is low, and that is correct.** With `-sm layer` the model is cut into
+  consecutive slices; for each token the cards work **in turn**, so each is busy a fraction
+  of the time. A 4-card decode draws far less than 4 × the cap. Read the **summed** power.
+- **Fewer cards is faster for decode.** Each extra card adds a hand-off per token.
+  `bench-model` picks the smallest number of cards the model fits on (weights ≤ 75 % of
+  their VRAM).
+
+---
+
+## The tensor-split trap (`,` vs `/`)
+
+`llama-server` and `llama-cli` take `--tensor-split 1,1,1,1`. **`llama-bench` takes
+`-ts 1/1/1/1`** — in `llama-bench` a comma means "run the test once per value". So
+`-ts 1,1,1,1` there is four tests with split `1` = **everything on GPU 0**, and any model
+bigger than one card fails with a bare `failed to load model`.
+
+On this rig that looked for two days like a "llama-bench + `--load-mode dio` + multi-GPU
+bug" and pushed three models onto a manual `llama-cli` workaround whose prefill numbers
+were ~15× lower than the real ones. The harness now converts a comma `-ts` to slashes and
+rejects every other comma (sweeps would silently overwrite each other's results).
+
+---
+
+## Prompt batch size is a condition too
+
+`--ubatch-size` (physical batch) decides how many prompt tokens go through the GPU at once.
+llama.cpp's default is 512. Measured on 30 Sep 2026 (prefill of 4096 tokens, 256…4096):
+
+| Model | Best ubatch | vs 512 | Worst case |
+|---|---|---|---|
+| Qwen3-235B-A22B | 4096 | **+57 %** | rises all the way |
+| DeepSeek-V4-Flash | 1024 | **+35 %** | 4096 is **−58 %** vs 1024 |
+| gpt-oss-120b | 1024 | +18 % | 4096 −35 % |
+| Qwen3-32B (dense) | 1024–4096 | +3 % | flat |
+
+Decode does not depend on it. Because it moves prefill by up to ±50 %, the harness records
+the **effective** batch/ubatch (read back from llama-bench's JSON) in every row. Standard
+`bench-model` runs use llama.cpp defaults so rows stay comparable; served models use the
+measured optimum (see the llama-swap config).
 
 ---
 
@@ -135,7 +197,8 @@ peaked at **19 W** — a 6000 tok/s model barely warming the card.
 That was false, and the reason is mundane: at `-p 512 -n 128` the model's entire
 computation takes **under a second** (prefill ~0.08 s, decode ~0.85 s). The rest of the
 wall-clock time is loading 12 GB of weights from disk. Telemetry sampled every 2 s simply
-never observed the load.
+never observed the load. (The harness now samples every 1 s — one `amd-smi` call for four
+GPUs takes ~0.1 s — but the lesson stands.)
 
 Under a long test the same model draws **288 W at 57 °C** — nearly identical to the dense
 model.

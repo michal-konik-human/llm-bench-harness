@@ -1,0 +1,3 @@
+run_id,model,config,test,tok/s,spread,n,arch,params,quant,GiB,GPUs,split,PCIe (under load),cap W,fan curve,peak junction,peak VRAM,GPU W peak / mean,FA,batch/ubatch,KV,load,CPU profile,llama.cpp,ROCm,verdict
+20260930-125802,gpt-oss-20b,throughput,pp512,5726.01,0.7%,3,gpt-oss,32x2.4B (MoE 32/4),MXFP4,11.3,1×R9700 (0),none,x8 Gen5,250,55:20 65:30 75:55 82:80 90:100,52 °C,42 °C,246 / 105,on,2048/512,f16/f16,auto,balanced,680a036,7.2.4,OK
+20260930-125802,gpt-oss-20b,throughput,tg128,149.53,0.1%,3,gpt-oss,32x2.4B (MoE 32/4),MXFP4,11.3,1×R9700 (0),none,x8 Gen5,250,55:20 65:30 75:55 82:80 90:100,52 °C,42 °C,246 / 105,on,2048/512,f16/f16,auto,balanced,680a036,7.2.4,OK

@@ -1,22 +1,55 @@
 {
   "name": "qwen3-235b-a22b-3gpu",
-  "_comment": "Qwen3-235B-A22B (235B total, 22B active MoE), UD-Q2_K_XL (~83 GiB on disk) across all three R9700s. --load-mode dio required (P16). WARNING: weights alone leave only ~8-13 GiB of the 96 GiB total for KV-cache + compute buffers across 3 cards -- llama-bench has no explicit context-size flag, ctx is implied by -p/-n per test (640 tok for throughput, ~5120 for thermal), which stays comfortably inside that budget. This is the tightest-fitting model run on this rig so far.",
+  "_comment": "Qwen3-235B-A22B (235B total, 22B active MoE), UD-Q2_K_XL (~83 GiB on disk) across all three R9700s. --load-mode dio required (P16). WARNING: weights alone leave only ~8-13 GiB of the 96 GiB total for KV-cache + compute buffers across 3 cards -- llama-bench has no explicit context-size flag, ctx is implied by -p/-n per test (640 tok for throughput, ~5120 for thermal), which stays comfortably inside that budget. This is the tightest-fitting model run on this rig so far. FIXED 2026-09-30: tensor split written with '/' (llama-bench syntax) -- the earlier ',' form made llama-bench sweep four values of '1' = everything on GPU 0, which is what failed with 'failed to load model'.",
   "runs": 3,
   "cooldown_s": 60,
   "temp_limit_c": 95,
   "models": [
-    { "name": "qwen3-235b-a22b", "path": "~/models/qwen3-235b-a22b/UD-Q2_K_XL/Qwen3-235B-A22B-UD-Q2_K_XL-00001-of-00002.gguf" }
+    {
+      "name": "qwen3-235b-a22b",
+      "path": "~/models/qwen3-235b-a22b/UD-Q2_K_XL/Qwen3-235B-A22B-UD-Q2_K_XL-00001-of-00002.gguf"
+    }
   ],
   "configs": [
     {
       "name": "throughput",
-      "env": { "HIP_VISIBLE_DEVICES": "0,1,2" },
-      "args": ["-ngl", "999", "-sm", "layer", "-ts", "1,1,1", "--load-mode", "dio", "-p", "512", "-n", "128"]
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1,2"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1/1/1",
+        "--load-mode",
+        "dio",
+        "-p",
+        "512",
+        "-n",
+        "128"
+      ]
     },
     {
       "name": "thermal",
-      "env": { "HIP_VISIBLE_DEVICES": "0,1,2" },
-      "args": ["-ngl", "999", "-sm", "layer", "-ts", "1,1,1", "--load-mode", "dio", "-p", "4096", "-n", "1024"]
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1,2"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1/1/1",
+        "--load-mode",
+        "dio",
+        "-p",
+        "4096",
+        "-n",
+        "1024"
+      ]
     }
   ]
 }
