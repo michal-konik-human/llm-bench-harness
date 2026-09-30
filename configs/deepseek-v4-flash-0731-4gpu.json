@@ -1,13 +1,13 @@
 {
-  "name": "deepseek-v4-flash-4gpu",
-  "_comment": "DeepSeek-V4-Flash (arch deepseek4, MoE), unsloth UD-IQ3_XXS (4 shards, ~91 GiB) across all FOUR R9700s (128 GiB). --load-mode dio required (P16). Tensor split uses '/' (see qwen3-235b-a22b-q3-4gpu.json). Needs llama.cpp with the deepseek4 architecture (present in 680a036). Measured at the 250 W power cap set by gpu-tuning.service (2026-09-30).",
+  "name": "deepseek-v4-flash-0731-4gpu",
+  "_comment": "DeepSeek-V4-Flash-0731 (official release, superseding the preview; same deepseek4 architecture, 284B total / 13B active MoE), unsloth UD-IQ3_XXS (4 shards, 104.2 GB) across all FOUR R9700s, 250 W cap. Same flags as deepseek-v4-flash-4gpu.json so the two rows are directly comparable (same llama.cpp commit, cap, GPUs, split, llama.cpp default batch sizes).",
   "runs": 3,
   "cooldown_s": 60,
   "temp_limit_c": 95,
   "models": [
     {
-      "name": "deepseek-v4-flash",
-      "path": "~/models/DeepSeek-V4-Flash-GGUF/UD-IQ3_XXS/DeepSeek-V4-Flash-UD-IQ3_XXS-00001-of-00004.gguf"
+      "name": "deepseek-v4-flash-0731",
+      "path": "~/models/DeepSeek-V4-Flash-0731-GGUF/UD-IQ3_XXS/DeepSeek-V4-Flash-0731-UD-IQ3_XXS-00001-of-00004.gguf"
     }
   ],
   "configs": [
