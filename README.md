@@ -3,8 +3,8 @@
 A benchmark harness for local LLM inference that records **the conditions, not just the
 numbers** — and tells you when a result is not trustworthy.
 
-Built for a single-node AMD/ROCm box running `llama.cpp`. Driven either by you or by a
-local agent.
+Built for a single-node AMD/ROCm box running `llama.cpp` — one GPU or several (developed on
+4× Radeon AI PRO R9700). Driven either by you or by a local agent.
 
 ```bash
 bench-model --list-new       # which models have no result yet
@@ -30,15 +30,17 @@ it records everything needed to reproduce or invalidate the result.
 
 | | Why it has to be recorded |
 |---|---|
+| Model: architecture, params (total/active, experts), quant, size, native context | Read from the GGUF header — a "235B" dense and a "235B-A22B" MoE are different animals |
 | `llama.cpp` commit **and build flags** | Results are not comparable across builds |
-| ROCm version, kernel, kernel cmdline | `iommu=pt` and friends live here |
-| GPU power cap | 300 W and 210 W are two different measurements of the same model |
-| PCIe link width/speed, read **under load** | Links downtrain at idle; add a 2nd GPU and the 1st drops x16→x8 |
-| Peak junction / VRAM temp / power | If the card throttled, the number is about cooling, not the model |
+| llama-bench's **effective** parameters | Flash attention, batch/ubatch, KV type, split, load mode — read back from its JSON, not assumed |
+| ROCm version, kernel, kernel cmdline | `amdgpu.ppfeaturemask` and friends live here |
+| Per-GPU power cap and fan curve | 300 W and 250 W are two different measurements of the same model |
+| PCIe link, **bottleneck of the path**, under load | The R9700's endpoint always says x16 (it talks to a switch on the card); the real slot link is x8 or x4 |
+| Peak junction / VRAM temp / power **per GPU**, plus summed power | If a card throttled, the number is about cooling, not the model |
 | Env vars and flags, **verbatim** | `HIP_VISIBLE_DEVICES`, `GGML_*`, `NCCL_*` change everything |
-| ECC + AER counters **before and after** | If they moved, the hardware misbehaved — discard, don't adjust |
-| Other processes holding the GPU | A second consumer makes the run measure contention |
-| CPU, RAM, BIOS version | Cheap to record, annoying to reconstruct later |
+| ECC + AER counters **before and after**, every GPU and link | If they moved, the hardware misbehaved — discard, don't adjust |
+| Other processes holding the GPUs, models loaded in llama-swap | A second consumer makes the run measure contention |
+| CPU, CPU power profile, RAM, BIOS | Cheap to record, annoying to reconstruct later |
 
 ## What makes it different from `llama-bench` in a loop
 
@@ -80,15 +82,27 @@ You shouldn't have to infer from a table whether a measurement was valid.
 **5. Spread is reported as prominently as the mean** — because with bimodal hardware the
 mean describes a state the card is never in.
 
+**6. Multi-GPU aware.** GPUs come from the config's `HIP_VISIBLE_DEVICES`, mapped through
+the PCI address to `amd-smi` (never assumed). Telemetry, the thermal guard (junction **and**
+VRAM), error counters and power caps cover **every** GPU used; power caps set by a config
+are restored afterwards. `bench-model` picks the smallest number of cards a model fits on.
+
+**7. It validates the config before running anything.** The most expensive mistake it
+catches: in `llama-bench` a comma means *sweep* — `-ts 1,1,1,1` is four tests with split
+`1`, i.e. everything on GPU 0, which fails with a bare `failed to load model` on any model
+bigger than one card. That cost two days of chasing a "llama-bench + dio multi-GPU bug"
+that did not exist. The harness converts a comma `-ts` to the slash form and rejects every
+other sweep, `-r`, a missing model file, and a config that would run on the integrated GPU.
+
 ---
 
 ## Install
 
-Requirements: Linux, ROCm with `amd-smi`, a built `llama-bench`, Python 3.10+.
-No third-party Python packages. `lm-sensors` optional.
+Requirements: Linux, ROCm with `amd-smi` and `rocminfo`, a built `llama-bench`, Python 3.10+.
+No third-party Python packages.
 
 ```bash
-git clone https://github.com/<you>/llm-bench-harness.git
+git clone https://github.com/michal-konik-human/llm-bench-harness.git
 cd llm-bench-harness
 sudo ln -s "$PWD/bench-model" /usr/local/bin/bench-model   # optional, for PATH
 ```
@@ -97,9 +111,7 @@ Everything hardware-specific is auto-detected. Overrides if you need them:
 
 | Variable | Default |
 |---|---|
-| `RIG_GPU_INDEX` | `0` |
-| `RIG_GPU_BDF` | auto-detected from `amd-smi` |
-| `RIG_VRAM_MB` | auto-detected |
+| `RIG_GPU_INDEX` | `0` — GPU for configs without `HIP_VISIBLE_DEVICES` |
 | `RIG_MODELS_DIR` | `~/models` |
 | `LLAMA_CPP_DIR` | `~/llama.cpp` |
 
@@ -113,9 +125,10 @@ Everything hardware-specific is auto-detected. Overrides if you need them:
 bench-model qwen3-32b
 ```
 
-It checks the model fits in VRAM, **refuses to start** on a hot card or with non-zero
-ECC/AER counters, runs both tests × 3 independent processes, writes a report, and appends
-to the index. It ends with one machine-readable line:
+It sizes the model from all its shards, picks the smallest number of GPUs it fits on,
+**refuses to start** on a hot card, non-zero ECC/AER counters, a GPU held by another
+process or a model left loaded in llama-swap, runs both tests × 3 independent processes,
+writes a detailed report, and appends to the shared table. It ends with one machine-readable line:
 
 ```
 VERDICT: OK | WITH_CAVEAT | INVALID | SKIPPED
@@ -149,9 +162,15 @@ results/<timestamp>/
 ├── report.md      human-readable, verdict first
 ├── results.json   full machine-readable record
 ├── results.csv    spreadsheet
-└── raw.log        raw llama-bench output
+└── raw.log        raw llama-bench output (JSON + stderr) of every process
 results/all-benchmark-results.md   growing comparison table across ALL runs
 ```
+
+**Every run** — through `bench-model` or straight through `bench.py` — appends its rows
+to `all-benchmark-results.md`: model (arch, params, quant, size), result (mean, spread, n),
+hardware used (GPUs, split, PCIe per GPU), hardware settings (cap, fan curve, CPU profile),
+software settings (FA, batch/ubatch, KV, load mode, llama.cpp, ROCm) and the verdict.
+`./bench.py --reindex` rebuilds it from every `results.json`, keeping manual rows and notes.
 
 `all-benchmark-results.md` is the point of the whole thing: one table where every model you've ever
 measured sits beside the others **with its conditions**. Only compare rows with the same
@@ -204,7 +223,21 @@ Spread across independent processes stayed under 0.25 %, so the documented bimod
 **did not appear** in this configuration. The method stays anyway — it costs nothing, and
 the alternative is variance you never notice.
 
-More hardware-specific findings: [radeon-r9700-rocm-notes](https://github.com/<you>/radeon-r9700-rocm-notes).
+### Four cards, 128 GB VRAM — the big MoE models (30 Sep 2026)
+
+4× R9700, `-sm layer`, 250 W cap per card, PCIe x8/x4/x8/x4 Gen5, `llama.cpp 680a036`,
+`--load-mode dio`, llama.cpp default batch sizes, 3 independent runs each:
+
+| Model | Size | prefill `pp512` | prefill `pp4096` | decode `tg128` | Spread |
+|---|---|---:|---:|---:|---:|
+| Qwen3-235B-A22B UD-Q3_K_XL (MoE 128/8) | 96.6 GiB | 619 | 583 | **32.7** | ≤ 1.0 % |
+| DeepSeek-V4-Flash UD-IQ3_XXS (MoE 256/6) | 95.9 GiB | 517 | **1020** | **24.0** | ≤ 2.7 % |
+
+DeepSeek processes a 4k prompt **twice as fast** as a 512-token one; Qwen3 gets slightly
+slower. The prompt-batch size (`--ubatch-size`) is worth up to **+57 %** prefill for one
+model and **−58 %** for another — see `results/all-benchmark-results.md`.
+
+More hardware-specific findings: [radeon-r9700-rocm-notes](https://github.com/michal-konik-human/radeon-r9700-rocm-notes).
 
 ---
 
@@ -227,6 +260,8 @@ Stated plainly, because it matters:
   `llama-bench` measures throughput. This is the most important missing piece.
 - **Answer quality** — use `lm-evaluation-harness` against `llama-server`.
 - **Concurrent request behaviour** — matters as soon as more than one person uses the box.
+- **Tensor-parallel / vLLM.** The harness drives `llama-bench` (layer split). vLLM TP on
+  RDNA4 needs `NCCL_PROTO=Simple` and more — see the notes repo.
 - **Non-AMD hardware.** Telemetry goes through `amd-smi`. The structure would port to
   `nvidia-smi` without much trouble; I don't have the hardware to test it.
 

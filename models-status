@@ -21,7 +21,10 @@ Sources, all optional — each section degrades gracefully if its source is abse
 Environment:
   RIG_MODELS_DIR    default ~/models
   LLAMA_SWAP_URL    default http://127.0.0.1:8080
-  BENCH_INDEX       default ~/bench/results/all-benchmark-results.md
+  BENCH_INDEX       default: results/all-benchmark-results.md next to this script
+
+Model names, shard handling and sizes come from bench.py's model_catalog(), so this
+tool, bench-model and the results table always agree on what a model is called.
 
 License: MIT
 """
@@ -32,11 +35,18 @@ import os
 import re
 import subprocess
 import sys
+import importlib.util
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+_loader = SourceFileLoader("bench", str(_HERE / "bench.py"))
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("bench", _loader))
+_loader.exec_module(B)
 
 MODELS_DIR = Path(os.environ.get("RIG_MODELS_DIR", Path.home() / "models"))
 SWAP_URL = os.environ.get("LLAMA_SWAP_URL", "http://127.0.0.1:8080")
-INDEX = Path(os.environ.get("BENCH_INDEX", Path.home() / "bench/results/all-benchmark-results.md"))
+INDEX = Path(os.environ.get("BENCH_INDEX", B.INDEX))
 
 # Fraction of VRAM the weights may occupy; the rest is KV cache, which grows with
 # context length. A model that exactly fills VRAM cannot hold any context.
@@ -103,34 +113,50 @@ def detect_quant(name):
 
 def downloaded():
     out = []
-    if not MODELS_DIR.exists():
-        return out
-    seen = {}
-    for p in sorted(MODELS_DIR.rglob("*.gguf")):
-        if re.search(r"-0000[2-9]-of-", p.name):     # only the first shard
-            continue
-        key = p.parent.name if p.parent != MODELS_DIR else p.stem
-        if key not in seen or p.stat().st_size > seen[key].stat().st_size:
-            seen[key] = p
-    for name, p in seen.items():
+    for name, m in B.model_catalog(MODELS_DIR).items():
+        p = Path(m["path"])
         out.append({"name": name, "path": str(p), "file": p.name,
-                    "gb": p.stat().st_size / 1e9, "quant": detect_quant(p.name)})
-    return sorted(out, key=lambda m: m["name"])
+                    "shards": len(m["files"]), "gb": m["bytes"] / 1e9,
+                    "quant": m.get("quant") or detect_quant(p.name)})
+    return out
+
+
+def fit_label(gb, gpus, tty):
+    """Smallest number of discrete GPUs the weights fit on (<= 75 % of their VRAM)."""
+    if not gpus:
+        return c(tty, C_DIM, "fit unknown")
+    mb = gb * 1e9 / 2**20
+    for n in range(1, len(gpus) + 1):
+        vram = sum(g["vram_total_mb"] or 0 for g in gpus[:n])
+        if vram and mb <= vram * WEIGHTS_BUDGET:
+            return c(tty, C_OK, f"{n} GPU{'s' if n > 1 else ''} (+{(vram - mb) / 1024:.0f}G KV)")
+    vram = sum(g["vram_total_mb"] or 0 for g in gpus)
+    return c(tty, C_WARN, f"tight on {len(gpus)}") if mb <= vram * 0.92 else c(tty, C_CRIT, "TOO BIG")
 
 
 def gpu_state():
-    data = run_json(["amd-smi", "metric", "-g", "0", "--json"], timeout=25)
-    if not data or not data.get("gpu_data"):
+    """Every discrete GPU (the iGPU is skipped): VRAM, temperature, power, activity."""
+    data = run_json(["amd-smi", "metric", "--json"], timeout=25)
+    rows = data.get("gpu_data") if isinstance(data, dict) else data
+    if not isinstance(rows, list) or not rows:
         return None
-    g = data["gpu_data"][0]
-    mem, t, p = dsec(g, "mem_usage"), dsec(g, "temperature"), dsec(g, "power")
-    return {
-        "vram_used_mb": leaf(mem.get("used_vram")),
-        "vram_total_mb": leaf(mem.get("total_vram")),
-        "junction_c": leaf(t.get("hotspot")),
-        "power_w": leaf(p.get("socket_power")),
-        "gfx_pct": leaf(dsec(g, "usage").get("gfx_activity")),
-    }
+    B.discover()
+    out = []
+    for g in rows:
+        inv = B.INVENTORY.get(g.get("gpu"), {})
+        if B.is_igpu(inv):
+            continue
+        mem, t, p = dsec(g, "mem_usage"), dsec(g, "temperature"), dsec(g, "power")
+        out.append({
+            "gpu": g.get("gpu"), "bdf": inv.get("bdf"),
+            "vram_used_mb": leaf(mem.get("used_vram")),
+            "vram_total_mb": leaf(mem.get("total_vram")),
+            "junction_c": leaf(t.get("hotspot")),
+            "power_w": leaf(p.get("socket_power")),
+            "gfx_pct": leaf(dsec(g, "usage").get("gfx_activity")),
+            "power_cap_w": B.power_cap_w(inv) if inv else None,
+        })
+    return out or None
 
 
 def gpu_holders():
@@ -184,6 +210,17 @@ def benchmarked():
         elif test.startswith("tg"):
             e["decode"] = toks
         e["run_id"] = run_id
+    # Rows are named after the config's model name, which need not match the catalog
+    # name — map through the model file recorded in each results.json as well.
+    for rj in INDEX.parent.glob("*/results.json"):
+        try:
+            rec = json.loads(rj.read_text())
+        except Exception:
+            continue
+        for cell in rec.get("cells", []):
+            if cell.get("model") in out and cell.get("model_path"):
+                out.setdefault("@" + str(Path(os.path.expanduser(cell["model_path"])).resolve()),
+                               out[cell["model"]])
     return out
 
 
@@ -214,22 +251,12 @@ def main():
                           "loaded": list(loaded)}, indent=2))
         return
 
-    total = gpu["vram_total_mb"] if gpu and gpu.get("vram_total_mb") else None
 
     head("DOWNLOADED", tty)
     if not dl:
         print(f"  nothing found in {MODELS_DIR}")
     for m in dl:
-        mb = m["gb"] * 1000
-        if total:
-            if mb > total:
-                fit = c(tty, C_CRIT, "TOO BIG")
-            elif mb > total * WEIGHTS_BUDGET:
-                fit = c(tty, C_WARN, "tight")
-            else:
-                fit = c(tty, C_OK, f"fits (+{(total - mb) / 1000:.0f}GB KV)")
-        else:
-            fit = c(tty, C_DIM, "fit unknown")
+        fit = fit_label(m["gb"], gpu, tty)
 
         if m["name"] in loaded:
             where = "CPU" if m["name"] in on_cpu else "GPU"
@@ -237,11 +264,11 @@ def main():
         else:
             state = c(tty, C_DIM, "  idle")
 
-        b = bench.get(m["name"])
+        b = bench.get(m["name"]) or bench.get("@" + str(Path(m["path"]).resolve()))
         mark = c(tty, C_DIM, f"✓ {b.get('decode', '?')} tok/s decode") if b \
             else c(tty, C_WARN, "not benchmarked")
-        print(f"  {m['name']:<16} {m['gb']:5.1f} GB  {m['quant']:<7} "
-              f"{fit:<32} {state:<28} {mark}")
+        print(f"  {m['name']:<30} {m['gb']:6.1f} GB  {m['quant']:<11} "
+              f"{fit:<34} {state:<28} {mark}")
         if not args.short:
             print(c(tty, C_DIM, f"                   {m['file']}"))
 
@@ -267,9 +294,10 @@ def main():
     if not gpu:
         print("  amd-smi not responding")
     else:
-        used, tot = gpu.get("vram_used_mb"), gpu.get("vram_total_mb")
-        print(f"  VRAM  {used} / {tot} MB     junction {gpu.get('junction_c')}C     "
-              f"{gpu.get('power_w')}W     gfx {gpu.get('gfx_pct')}%")
+        for g in gpu:
+            print(f"  gpu{g['gpu']} {g.get('bdf')}  VRAM {g.get('vram_used_mb')} / "
+                  f"{g.get('vram_total_mb')} MB   junction {g.get('junction_c')}C   "
+                  f"{g.get('power_w')}W (cap {g.get('power_cap_w')}W)   gfx {g.get('gfx_pct')}%")
         if holders:
             for h in holders:
                 print(f"  held by  {h['name']} (pid {h['pid']})")
@@ -284,7 +312,7 @@ def main():
     if bench and not args.short:
         print()
         head("BENCHMARKS", tty)
-        for name, b in sorted(bench.items()):
+        for name, b in sorted((k, v) for k, v in bench.items() if not k.startswith("@")):
             print(f"  {name:<16} prefill {b.get('prefill', '?'):>8}  "
                   f"decode {b.get('decode', '?'):>7}   "
                   + c(tty, C_DIM, f"({b.get('run_id')})"))

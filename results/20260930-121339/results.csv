@@ -1,0 +1,5 @@
+model,config,power_cap_w,test,n,mean_tok_s,min_tok_s,max_tok_s,spread_pct,peak_junction_c,peak_vram_c,peak_power_w,link_width,link_speed,llama_commit,rocm
+qwen3-235b-a22b-q3,throughput,250,pp512,3,619.39,618.39,620.18,0.29,53,38,244,16,32.0 GT/s PCIe,680a036,7.2.4
+qwen3-235b-a22b-q3,throughput,250,tg128,3,32.74,32.73,32.75,0.06,53,38,244,16,32.0 GT/s PCIe,680a036,7.2.4
+qwen3-235b-a22b-q3,thermal,250,pp4096,3,583.27,580.41,586.21,0.99,60,48,294,16,32.0 GT/s PCIe,680a036,7.2.4
+qwen3-235b-a22b-q3,thermal,250,tg1024,3,32.57,32.56,32.59,0.09,60,48,294,16,32.0 GT/s PCIe,680a036,7.2.4
