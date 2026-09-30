@@ -138,6 +138,28 @@ amd-smi metric -g 0 | grep -A4 "    ECC:"
 
 ---
 
+## Several GPUs by hand
+
+```bash
+export HIP_VISIBLE_DEVICES=0,1,2,3          # check with: rocminfo | grep -E "Marketing|BDFID"
+./llama-bench -m "$M" -ngl 999 -sm layer -ts 1/1/1/1 --load-mode dio -p 512 -n 128 -r 1
+#                                            ^^^^^^^ SLASHES in llama-bench (commas = sweep)
+```
+
+Watch **all** the cards (`amd-smi metric -g 0 1 2 3`), and read each card's real link at
+the **root port**, not the GPU endpoint (the R9700 has a switch on the card, the endpoint
+always says x16):
+
+```bash
+for b in 03:00.0 06:00.0 09:00.0 19:00.0; do
+  for d in $(readlink -f /sys/bus/pci/devices/0000:$b | grep -oE "[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-9]"); do
+    printf "%s x%s %s | " $d $(cat /sys/bus/pci/devices/$d/current_link_width) "$(cat /sys/bus/pci/devices/$d/current_link_speed)"
+  done; echo
+done
+```
+
+---
+
 ## When something looks wrong
 
 | Symptom | Cause and fix |
@@ -147,4 +169,6 @@ amd-smi metric -g 0 | grep -A4 "    ECC:"
 | `amd-smi set --power-cap 200` rejected | Firmware floor is 210 W on this card |
 | Model won't fit in VRAM | Weights **plus KV cache** must fit. Practical ceiling is ~75 % of VRAM for weights |
 | First run slower than the rest | Weights loading from disk. Normal — which is why you do several runs |
+| `failed to load model` on several GPUs, instantly | `-ts` written with commas in `llama-bench` — use `1/1/1/1` |
+| Link reads x16 on every card | You read the GPU endpoint. Read the root port (see above) |
 | `sudo` prompts and the run stalls | Setting the power cap needs root. Set it manually beforehand, or add a `NOPASSWD` entry for `amd-smi` |
