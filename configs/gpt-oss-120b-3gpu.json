@@ -1,11 +1,14 @@
 {
   "name": "gpt-oss-120b-3gpu",
-  "_comment": "gpt-oss-120b MXFP4 across all three R9700s. HIP_VISIBLE_DEVICES=0,1,2 is the three discrete cards (index 3 is the iGPU and must stay out -- indices shifted after the 3rd card was installed, confirmed live via amd-smi list on 2026-09-29). NCCL_PROTO/NCCL_P2P_DISABLE are NOT needed and do nothing on this build (GGML_HIP_RCCL=OFF, confirmed in TECHNIKA.md 9.x) -- removed. --load-mode dio is REQUIRED: without it, model load hangs indefinitely (VRAM fills, then GPU activity stays at 3-5% forever) due to a known ROCm HSA userptr-registration bug in the default mmap load path with large (>~50GB) models -- see llama.cpp issue #19482, confirmed by multiple users including a 4xR9700 report. This is NOT a VRAM/capacity issue -- TECHNIKA.md 10.3's original 'this model needs a third card' conclusion was wrong; the 2-card hang had the same root cause and would likely also be fixed by --load-mode dio. Rebuilt llama.cpp from 987498f (Sep 15) to 680a036 (Sep 28) during this investigation; the rebuild alone did NOT fix the hang, --load-mode dio did.",
+  "_comment": "gpt-oss-120b MXFP4 across all three R9700s. HIP_VISIBLE_DEVICES=0,1,2 is the three discrete cards (index 3 is the iGPU and must stay out -- indices shifted after the 3rd card was installed, confirmed live via amd-smi list on 2026-09-29). NCCL_PROTO/NCCL_P2P_DISABLE are NOT needed and do nothing on this build (GGML_HIP_RCCL=OFF, confirmed in TECHNIKA.md 9.x) -- removed. --load-mode dio is REQUIRED: without it, model load hangs indefinitely (VRAM fills, then GPU activity stays at 3-5% forever) due to a known ROCm HSA userptr-registration bug in the default mmap load path with large (>~50GB) models -- see llama.cpp issue #19482, confirmed by multiple users including a 4xR9700 report. This is NOT a VRAM/capacity issue -- TECHNIKA.md 10.3's original 'this model needs a third card' conclusion was wrong; the 2-card hang had the same root cause and would likely also be fixed by --load-mode dio. Rebuilt llama.cpp from 987498f (Sep 15) to 680a036 (Sep 28) during this investigation; the rebuild alone did NOT fix the hang, --load-mode dio did. FIXED 2026-09-30: tensor split written with '/' (llama-bench syntax) -- the earlier ',' form made llama-bench sweep four values of '1' = everything on GPU 0, which is what failed with 'failed to load model'.",
   "runs": 3,
   "cooldown_s": 60,
   "temp_limit_c": 95,
   "models": [
-    { "name": "gpt-oss-120b", "path": "~/models/gpt-oss-120b/gpt-oss-120b-MXFP4.gguf" }
+    {
+      "name": "gpt-oss-120b",
+      "path": "~/models/gpt-oss-120b/gpt-oss-120b-MXFP4.gguf"
+    }
   ],
   "configs": [
     {
@@ -13,14 +16,40 @@
       "env": {
         "HIP_VISIBLE_DEVICES": "0,1,2"
       },
-      "args": ["-ngl", "999", "-sm", "layer", "-ts", "1,1,1", "--load-mode", "dio", "-p", "512", "-n", "128"]
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1/1/1",
+        "--load-mode",
+        "dio",
+        "-p",
+        "512",
+        "-n",
+        "128"
+      ]
     },
     {
       "name": "thermal",
       "env": {
         "HIP_VISIBLE_DEVICES": "0,1,2"
       },
-      "args": ["-ngl", "999", "-sm", "layer", "-ts", "1,1,1", "--load-mode", "dio", "-p", "4096", "-n", "1024"]
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1/1/1",
+        "--load-mode",
+        "dio",
+        "-p",
+        "4096",
+        "-n",
+        "1024"
+      ]
     }
   ]
 }

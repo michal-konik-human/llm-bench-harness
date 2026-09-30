@@ -1,0 +1,59 @@
+{
+  "name": "deepseek-v4-flash-4gpu",
+  "_comment": "DeepSeek-V4-Flash (arch deepseek4, MoE), unsloth UD-IQ3_XXS (4 shards, ~91 GiB) across all FOUR R9700s (128 GiB). --load-mode dio required (P16). Tensor split uses '/' (see qwen3-235b-a22b-q3-4gpu.json). Needs llama.cpp with the deepseek4 architecture (present in 680a036). Measured at the 250 W power cap set by gpu-tuning.service (2026-09-30).",
+  "runs": 3,
+  "cooldown_s": 60,
+  "temp_limit_c": 95,
+  "models": [
+    {
+      "name": "deepseek-v4-flash",
+      "path": "~/models/DeepSeek-V4-Flash-GGUF/UD-IQ3_XXS/DeepSeek-V4-Flash-UD-IQ3_XXS-00001-of-00004.gguf"
+    }
+  ],
+  "configs": [
+    {
+      "name": "throughput",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1,2,3",
+        "NCCL_PROTO": "Simple",
+        "NCCL_P2P_DISABLE": "1"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1/1/1/1",
+        "--load-mode",
+        "dio",
+        "-p",
+        "512",
+        "-n",
+        "128"
+      ]
+    },
+    {
+      "name": "thermal",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1,2,3",
+        "NCCL_PROTO": "Simple",
+        "NCCL_P2P_DISABLE": "1"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1/1/1/1",
+        "--load-mode",
+        "dio",
+        "-p",
+        "4096",
+        "-n",
+        "1024"
+      ]
+    }
+  ]
+}

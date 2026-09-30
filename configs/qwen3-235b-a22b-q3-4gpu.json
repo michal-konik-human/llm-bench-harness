@@ -1,0 +1,59 @@
+{
+  "name": "qwen3-235b-a22b-q3-4gpu",
+  "_comment": "Qwen3-235B-A22B (235B total, 22B active MoE), unsloth UD-Q3_K_XL (96.6 GiB) across all FOUR R9700s (128 GiB). --load-mode dio required (P16, >50 GiB). NOTE: llama-bench's tensor-split separator is '/', not ',' -- '-ts 1,1,1,1' means four sweep values of '1' (everything on GPU 0) and fails with 'failed to load model'; that, not dio, was the 'llama-bench + dio + multi-GPU bug'. Measured at the 250 W power cap set by gpu-tuning.service (2026-09-30).",
+  "runs": 3,
+  "cooldown_s": 60,
+  "temp_limit_c": 95,
+  "models": [
+    {
+      "name": "qwen3-235b-a22b-q3",
+      "path": "~/models/Qwen3-235B-A22B-GGUF/UD-Q3_K_XL/Qwen3-235B-A22B-UD-Q3_K_XL-00001-of-00003.gguf"
+    }
+  ],
+  "configs": [
+    {
+      "name": "throughput",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1,2,3",
+        "NCCL_PROTO": "Simple",
+        "NCCL_P2P_DISABLE": "1"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1/1/1/1",
+        "--load-mode",
+        "dio",
+        "-p",
+        "512",
+        "-n",
+        "128"
+      ]
+    },
+    {
+      "name": "thermal",
+      "env": {
+        "HIP_VISIBLE_DEVICES": "0,1,2,3",
+        "NCCL_PROTO": "Simple",
+        "NCCL_P2P_DISABLE": "1"
+      },
+      "args": [
+        "-ngl",
+        "999",
+        "-sm",
+        "layer",
+        "-ts",
+        "1/1/1/1",
+        "--load-mode",
+        "dio",
+        "-p",
+        "4096",
+        "-n",
+        "1024"
+      ]
+    }
+  ]
+}

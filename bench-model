@@ -7,329 +7,209 @@ Designed so a SMALL local model can drive it: the agent doesn't infer anything o
 assemble a config, it just passes a model name.
 
   bench-model --list-new                 which models have no result yet
-  bench-model qwen3-32b                  measure one model (by directory name)
-  bench-model ~/models/foo/bar.gguf      or by path
+  bench-model qwen3-32b                  measure one model (name from --list-new)
+  bench-model ~/models/foo/bar.gguf      or by path (first shard of a split model)
   bench-model --all-new                  measure everything unmeasured
   bench-model qwen3-32b --quick          throughput only, skip the thermal test
+  bench-model qwen3-32b --gpus 4         force the number of GPUs
   bench-model --reindex                  rebuild results/all-benchmark-results.md
 
 WHAT IT DOES SO THE CALLER DOESN'T HAVE TO THINK
 
-  1. Checks the model even fits in VRAM (weights + headroom for KV cache).
-  2. Checks hardware state BEFORE measuring, and refuses to start on a hot card or
-     with non-zero error counters — the result would be void anyway.
+  1. Sizes the model from ALL its shards and picks the SMALLEST number of discrete GPUs
+     it fits on (weights <= 75 % of their VRAM — the rest is KV cache and compute
+     buffers). The integrated GPU is never used. More cards than needed only add
+     hand-offs between them in layer split, so fewer is faster for decode.
+  2. Checks hardware state of EVERY chosen GPU before measuring, and refuses to start on
+     a hot card, non-zero error counters, a GPU held by another process, or a model
+     left loaded in llama-swap — the result would be void anyway.
   3. Runs TWO tests, because one is not enough:
        throughput  (-p 512  -n 128)   short; measures tok/s
        thermal     (-p 4096 -n 1024)  long;  measures real temperature and power
      Without the long test, fast MoE models report an absurd ~19 W peak, because the
      entire computation finishes faster than the telemetry sampling period.
   4. Generates the config and calls bench.py, which holds the actual methodology
-     (separate processes, condition recording, ECC/AER before and after, thermal guard).
-  5. Appends a row to results/all-benchmark-results.md — a growing comparison table of every model
-     ever measured, with its conditions.
-  6. Prints ONE final line, `VERDICT: ...`, for the caller to act on.
+     (separate processes, condition recording, ECC/AER before and after, thermal guard
+     on all GPUs) and writes the detailed report + the row in the shared table.
+  5. Prints ONE final line, `VERDICT: ...`, for the caller to act on.
 
-Environment overrides: see bench.py (RIG_GPU_INDEX, RIG_GPU_BDF, RIG_VRAM_MB,
-RIG_MODELS_DIR).
+Settings used for every model (so rows are comparable): llama.cpp defaults for
+batch/ubatch and KV cache, flash attention ON (as llama-server serves it), split
+`layer` with equal shares, `--load-mode dio` for models over 40 GiB (ROCm mmap hang,
+TECHNIKA P16).
+
+Environment overrides: see bench.py (RIG_GPU_INDEX, RIG_MODELS_DIR, LLAMA_CPP_DIR).
 
 License: MIT
 """
 
 import argparse
+import importlib.util
 import json
 import os
-import re
 import subprocess
 import sys
 import time
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
-MODELS_DIR = Path(os.environ.get("RIG_MODELS_DIR", Path.home() / "models"))
-RESULTS = BASE / "results"
-INDEX = RESULTS / "all-benchmark-results.md"
 BENCH = BASE / "bench.py"
 
-GPU_INDEX = int(os.environ.get("RIG_GPU_INDEX", "0"))
 
-# Fraction of VRAM we allow the weights to occupy. The rest is KV cache, which grows
-# with context length — a model that exactly fills VRAM cannot hold any context.
+def _load_bench():
+    loader = SourceFileLoader("bench", str(BENCH))
+    spec = importlib.util.spec_from_loader("bench", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+B = _load_bench()
+RESULTS, INDEX = B.RESULTS, B.INDEX
+
+# Fraction of VRAM the weights may occupy. The rest is KV cache, which grows with
+# context length, plus compute buffers — a model that exactly fills VRAM cannot run.
 WEIGHTS_BUDGET_FRACTION = 0.75
 
 # Above this junction temperature the card has not cooled down from a previous run,
 # and the first run of a new series would start warm and measure low.
 START_TEMP_MAX_C = 45
 
-
-def run(cmd, timeout=60):
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, p.stdout, p.stderr
-    except Exception as exc:
-        return -1, "", str(exc)
+# Models above this size need --load-mode dio (ROCm HSA mmap-registration hang, P16).
+DIO_THRESHOLD_GIB = 40
 
 
-def run_json(cmd, timeout=60):
-    _, out, _ = run(cmd, timeout)
-    if not out.strip():
-        return None
-    try:
-        return json.loads(out)
-    except Exception:
-        return None
+# -------------------------------------------------------------------- discovery
 
-
-def dsec(node, name):
-    """amd-smi returns a bare "N/A" string instead of a dict for some sections."""
-    if not isinstance(node, dict):
-        return {}
-    v = node.get(name)
-    return v if isinstance(v, dict) else {}
-
-
-def leaf(x, default=None):
-    if isinstance(x, dict):
-        x = x.get("value")
-    return default if x in (None, "N/A") else x
-
-
-# ------------------------------------------------------------------- discovery
-
-def gpu_bdf():
-    override = os.environ.get("RIG_GPU_BDF")
-    if override:
-        return override
-    data = run_json(["amd-smi", "static", "-g", str(GPU_INDEX), "--json"], timeout=25)
-    if data and data.get("gpu_data"):
-        return leaf(dsec(data["gpu_data"][0], "bus").get("bdf"))
-    return None
-
-
-def vram_total_mb():
-    override = os.environ.get("RIG_VRAM_MB")
-    if override:
-        try:
-            return int(override)
-        except ValueError:
-            pass
-    data = run_json(["amd-smi", "metric", "-g", str(GPU_INDEX), "--json"], timeout=25)
-    if data and data.get("gpu_data"):
-        v = leaf(dsec(data["gpu_data"][0], "mem_usage").get("total_vram"))
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            pass
-    return None
-
-
-def find_models():
-    """Every .gguf under the models directory, grouped by containing directory."""
-    out = {}
-    if not MODELS_DIR.exists():
-        return out
-    for p in sorted(MODELS_DIR.rglob("*.gguf")):
-        # skip every shard of a multi-part model except the first
-        if re.search(r"-0000[2-9]-of-", p.name):
-            continue
-        name = p.parent.name if p.parent != MODELS_DIR else p.stem
-        # one model per directory: keep the largest file
-        if name not in out or p.stat().st_size > out[name].stat().st_size:
-            out[name] = p
+def discrete_gpus():
+    """Discrete GPUs in HIP order: list of inventory dicts with 'hip_index'."""
+    B.discover()
+    out = []
+    for hip, bdf in enumerate(B.HIP_BDFS or []):
+        g = next((x for x in B.INVENTORY.values() if x.get("bdf") == bdf), None)
+        if g and not B.is_igpu(g):
+            out.append(dict(g, hip_index=hip))
+    if not out:                                   # no rocminfo: trust amd-smi order
+        out = [dict(g, hip_index=i) for i, g in sorted(B.INVENTORY.items())
+               if not B.is_igpu(g)]
     return out
 
 
+def choose_gpus(size_bytes, force=None):
+    """Smallest set of discrete GPUs the weights fit on. -> (gpus, status)."""
+    gpus = discrete_gpus()
+    if not gpus:
+        return [], "NO_GPU"
+    if force:
+        return gpus[:force], ("OK" if force <= len(gpus) else "NOT_ENOUGH_GPUS")
+    need_mb = size_bytes / 2**20
+    for n in range(1, len(gpus) + 1):
+        vram = sum(g.get("vram_mb") or 0 for g in gpus[:n])
+        if vram and need_mb <= vram * WEIGHTS_BUDGET_FRACTION:
+            return gpus[:n], "OK"
+    total = sum(g.get("vram_mb") or 0 for g in gpus)
+    return gpus, ("TIGHT" if total and need_mb <= total * 0.92 else "DOES_NOT_FIT")
+
+
 def already_measured():
-    done = set()
+    """Model names and model files that have a result (results.json or index row)."""
+    names, paths = set(), set()
     for rj in RESULTS.glob("*/results.json"):
         try:
             rec = json.loads(rj.read_text())
         except Exception:
             continue
         for cell in rec.get("cells", []):
-            if cell.get("runs"):
-                done.add(cell.get("model"))
-    return done
+            if cell.get("runs") and any(r.get("results") for r in cell["runs"]):
+                names.add(cell.get("model"))
+                if cell.get("model_path"):
+                    paths.add(os.path.expanduser(cell["model_path"]))
+    if INDEX.exists():                            # manual rows (no results.json)
+        rows, _ = B._parse_index(INDEX.read_text(encoding="utf-8"))
+        names |= {r.get("model") for r in rows}
+    return names, paths
+
+
+def is_measured(name, m, names, paths):
+    return (name in names or m.get("base") in names
+            or str(Path(m["path"]).resolve()) in {str(Path(p).resolve()) for p in paths})
 
 
 # -------------------------------------------------------------------- preflight
 
-def preflight():
+def preflight(gpus):
     """Return (ok, [messages]). Refuses to measure on a hot or unhealthy card."""
     msgs, ok = [], True
-    data = run_json(["amd-smi", "metric", "-g", str(GPU_INDEX), "--json"], timeout=25)
-    if not data or not data.get("gpu_data"):
+    idx = [g["amd_index"] for g in gpus]
+    ms = B.gpu_metrics(idx)
+    if not ms:
         return False, ["amd-smi not responding — cannot record conditions"]
-    g = data["gpu_data"][0]
-    t, e = dsec(g, "temperature"), dsec(g, "ecc")
-
-    junction = leaf(t.get("hotspot"))
-    if isinstance(junction, (int, float)):
-        if junction > START_TEMP_MAX_C:
+    for i in idx:
+        j = (ms.get(i) or {}).get("junction_c")
+        if B._num(j) and j > START_TEMP_MAX_C:
             ok = False
-            msgs.append(f"card has NOT cooled down: junction {junction} C "
-                        f"(need <= {START_TEMP_MAX_C} C) — wait and retry")
-        else:
-            msgs.append(f"junction {junction} C — card is cool")
-
-    unc = leaf(e.get("total_uncorrectable_count"), 0)
-    if unc not in (0, None):
-        ok = False
-        msgs.append(f"uncorrectable ECC = {unc} — hardware fault, DO NOT measure")
-    else:
-        msgs.append("uncorrectable ECC = 0")
-
-    bdf = gpu_bdf()
-    aer = 0
-    for kind in ("fatal", "nonfatal"):
-        raw = ""
-        if bdf:
-            try:
-                raw = Path(f"/sys/bus/pci/devices/{bdf}/aer_dev_{kind}").read_text()
-            except OSError:
-                pass
-        for line in raw.splitlines():
-            parts = line.split()
-            if len(parts) == 2:
-                try:
-                    aer += int(parts[1])
-                except ValueError:
-                    pass
-    if aer:
-        ok = False
-        msgs.append(f"PCIe AER fatal/nonfatal = {aer} — physical problem, DO NOT measure")
-    else:
-        msgs.append("PCIe AER fatal/nonfatal = 0")
-
-    # A second consumer on the GPU makes the run measure contention, not the model.
-    procs = run_json(["amd-smi", "process", "--json"], timeout=25)
-    holders = []
-    if isinstance(procs, list):
-        for entry in procs:
-            if entry.get("gpu") != GPU_INDEX:
-                continue
-            for item in entry.get("process_list") or []:
-                info = item.get("process_info") if isinstance(item, dict) else None
-                if isinstance(info, dict) and info.get("name"):
-                    holders.append(Path(str(info["name"])).name)
+            msgs.append(f"gpu{i}: NOT cooled down — junction {j} C (need <= "
+                        f"{START_TEMP_MAX_C} C). Wait and retry")
+    if ok:
+        msgs.append("all GPUs cool: junction " + ", ".join(
+            f"gpu{i} {(ms.get(i) or {}).get('junction_c')} C" for i in idx))
+    snap = B.error_snapshot(gpus)
+    for dev, e in snap["ecc"].items():
+        if e.get("uncorrectable") not in (0, None):
+            ok = False
+            msgs.append(f"gpu{dev}: uncorrectable ECC = {e['uncorrectable']} — hardware "
+                        f"fault, DO NOT measure")
+    for bdf, a in snap["aer"].items():
+        bad = (a.get("fatal") or 0) + (a.get("nonfatal") or 0)
+        if bad:
+            ok = False
+            msgs.append(f"{bdf}: PCIe AER fatal/nonfatal = {bad} — physical problem, "
+                        f"DO NOT measure")
+    if ok:
+        msgs.append("uncorrectable ECC = 0, PCIe AER fatal/nonfatal = 0 on every GPU")
+    holders = B.gpu_consumers(idx)
     if holders:
         ok = False
-        msgs.append(f"GPU is NOT exclusive — held by: {', '.join(holders)}. "
-                    f"Stop them (an agent's model? a stray llama-server?) first")
+        msgs.append("GPU is NOT exclusive — held by: " + ", ".join(
+            f"gpu{h['gpu']} {Path(str(h['name'])).name} (pid {h['pid']})" for h in holders)
+            + ". Stop them (an agent's model? a stray llama-server?) first")
     else:
-        msgs.append("GPU is exclusive")
-
-    cap = None
-    st = run_json(["amd-smi", "static", "-g", str(GPU_INDEX), "--json"], timeout=25)
-    if st and st.get("gpu_data"):
-        cap = leaf(dsec(dsec(st["gpu_data"][0], "limit"), "ppt0")
-                   .get("socket_power_limit"))
-    msgs.append(f"power cap: {cap} W")
+        msgs.append("GPUs are exclusive")
+    loaded = B.llama_swap_running()
+    if loaded:
+        ok = False
+        msgs.append(f"llama-swap has {', '.join(map(str, loaded))} loaded — run: "
+                    f"curl -X POST http://127.0.0.1:8080/api/models/unload")
+    msgs.append("power caps: " + ", ".join(f"gpu{g['amd_index']} {B.power_cap_w(g)} W"
+                                            for g in gpus))
     return ok, msgs
-
-
-def fits_check(path):
-    total = vram_total_mb()
-    mb = path.stat().st_size / (1024 * 1024)
-    if not total:
-        return "UNKNOWN", mb, None
-    budget = total * WEIGHTS_BUDGET_FRACTION
-    if mb > total:
-        return "DOES_NOT_FIT", mb, total
-    if mb > budget:
-        return "TIGHT", mb, total
-    return "OK", mb, total
 
 
 # ------------------------------------------------------------------ measurement
 
-def build_config(name, path, quick):
-    cfgs = [{
-        "name": "throughput",
-        "env": {"HIP_VISIBLE_DEVICES": str(GPU_INDEX)},
-        "args": ["-ngl", "999", "-sm", "none", "-p", "512", "-n", "128"],
-    }]
+def build_config(name, path, gpus, size_gib, quick):
+    hip = ",".join(str(g["hip_index"]) for g in gpus)
+    env = {"HIP_VISIBLE_DEVICES": hip}
+    if len(gpus) > 1:
+        # Mandatory on multi-GPU AMD (harmless for llama.cpp's layer split, required the
+        # moment anything uses RCCL): see configs/multi-gpu-EXAMPLE.json.
+        env.update({"NCCL_PROTO": "Simple", "NCCL_P2P_DISABLE": "1"})
+        split = ["-sm", "layer", "-ts", "/".join("1" for _ in gpus)]
+    else:
+        split = ["-sm", "none"]
+    base = ["-ngl", "999", *split, "-fa", "1"]
+    if size_gib > DIO_THRESHOLD_GIB:
+        base += ["--load-mode", "dio"]
+    cfgs = [{"name": "throughput", "env": env, "args": base + ["-p", "512", "-n", "128"]}]
     if not quick:
         # The long test exists so the thermal telemetry is MEANINGFUL. On a short test
-        # a fast MoE model finishes in under a second and the sampler never sees the
-        # load — the report then shows an absurd ~19 W peak.
-        cfgs.append({
-            "name": "thermal",
-            "env": {"HIP_VISIBLE_DEVICES": str(GPU_INDEX)},
-            "args": ["-ngl", "999", "-sm", "none", "-p", "4096", "-n", "1024"],
-        })
-    return {
-        "name": f"new-model-{name}",
-        "runs": 3,
-        "cooldown_s": 45,
-        "temp_limit_c": 95,
-        "models": [{"name": name, "path": str(path)}],
-        "configs": cfgs,
-    }
-
-
-def _arg_after(args, names):
-    names = {names} if isinstance(names, str) else set(names)
-    for i, a in enumerate(args):
-        if a in names and i + 1 < len(args):
-            return str(args[i + 1])
-    return None
-
-
-def hardware_used(rec, cell):
-    """Which cards and split the cell actually ran on — not the inventory of the box."""
-    env = rec.get("environment") or {}
-    cfg = next((c for c in rec.get("configs_used") or []
-                if c.get("name") == cell.get("config")), None)
-    if cfg is None and rec.get("configs_used"):
-        cfg = rec["configs_used"][0]
-    cfg = cfg or {}
-    args = [str(a) for a in (cfg.get("args") or [])]
-    hip = str((cfg.get("env") or {}).get("HIP_VISIBLE_DEVICES",
-                                         env.get("gpu_index", 0)))
-    idxs = []
-    for part in hip.split(","):
-        part = part.strip()
-        if part.isdigit():
-            idxs.append(int(part))
-    if not idxs:
-        idxs = [int(env.get("gpu_index") or 0)]
-        hip = str(idxs[0])
-    by_idx = {g.get("index"): g for g in (env.get("gpus") or [])
-              if isinstance(g, dict)}
-    labels = []
-    for i in idxs:
-        g = by_idx.get(i) or {}
-        name = str(g.get("name") or "")
-        if "R9700" in name:
-            labels.append("R9700")
-        elif "Radeon Graphics" in name or str(g.get("gfx") or "").startswith("gfx103"):
-            labels.append("iGPU")
-        else:
-            labels.append(str(g.get("gfx") or name or i))
-    if labels and all(x == labels[0] for x in labels):
-        gpus = f"{len(labels)}×{labels[0]} ({hip})"
-    else:
-        gpus = f"{'+'.join(labels)} ({hip})"
-    sm = _arg_after(args, ("-sm", "--split-mode")) or "none"
-    ts = _arg_after(args, ("-ts", "--tensor-split"))
-    split = f"{sm} {ts}" if ts else sm
-    link = "—"
-    for r in cell.get("runs") or []:
-        lu = r.get("link_under_load") or {}
-        w, s = lu.get("width"), lu.get("speed")
-        if w:
-            link = f"x{w}" + (f" {s}" if s else "")
-            break
-    return gpus, split, link
-
-
-def _peak_num(runs, key):
-    vals = []
-    for r in runs:
-        v = (r.get("peak") or {}).get(key)
-        if isinstance(v, (int, float)):
-            vals.append(v)
-    return max(vals) if vals else None
+        # a fast MoE model finishes in under a second and the sampler never sees the load.
+        cfgs.append({"name": "thermal", "env": env,
+                     "args": base + ["-p", "4096", "-n", "1024"]})
+    return {"name": f"new-model-{name}", "runs": 3, "cooldown_s": 45,
+            "temp_limit_c": 95, "models": [{"name": name, "path": str(path)}],
+            "configs": cfgs}
 
 
 def latest_result_dir(before):
@@ -340,164 +220,57 @@ def latest_result_dir(before):
 
 def summarise_result(outdir):
     rec = json.loads((outdir / "results.json").read_text())
-    env = rec["environment"]
-    lines, index_rows, worst = [], [], "OK"
-
+    lines, worst = [], "OK"
+    rank = {"OK": 0, "WITH_CAVEAT": 1, "INVALID": 2}
     for cell in rec["cells"]:
-        if cell.get("error") or not cell.get("runs"):
-            worst = "INVALID"
-            lines.append(f"  {cell.get('model')}/{cell.get('config')}: NO RESULT "
-                         f"({cell.get('error', 'aborted')})")
-            continue
-        per = {}
-        for r in cell["runs"]:
-            for test, v in (r.get("results") or {}).items():
-                per.setdefault(test, []).append(v["tok_s"])
-        if not per:
-            worst = "INVALID"
-            lines.append(f"  {cell['model']}/{cell['config']}: NO RESULT")
-            continue
-        pj = _peak_num(cell["runs"], "junction_c")
-        pw = _peak_num(cell["runs"], "power_w")
-        gpus, split, pcie = hardware_used(rec, cell)
-        for test, vals in per.items():
-            mean = sum(vals) / len(vals)
-            spread = (max(vals) - min(vals)) / mean * 100 if mean else 0
-            note = ""
-            if spread > 10:
-                note = "  <-- SPREAD>10%: bimodal, do NOT report the mean"
-                worst = "WITH_CAVEAT" if worst == "OK" else worst
-            if isinstance(pj, (int, float)) and pj >= 85:
-                note += "  <-- junction>=85C: measuring cooling"
-                worst = "WITH_CAVEAT" if worst == "OK" else worst
-            jtxt = f"{pj}C" if pj is not None else "n/a"
-            wtxt = f"{pw}W" if pw is not None else "n/a"
-            lines.append(f"  {cell['model']}/{cell['config']} {test}: "
-                         f"{mean:.2f} tok/s (spread {spread:.1f}%, "
-                         f"peak junction {jtxt}, {wtxt}){note}")
-            index_rows.append({
-                "model": cell["model"], "config": cell["config"], "test": test,
-                "mean": mean, "spread": spread, "junction": pj, "power": pw,
-                "cap": cell.get("power_cap_w"), "run_id": rec["run_id"],
-                "commit": env.get("llama_cpp_commit"), "rocm": env.get("rocm"),
-                "gpus": gpus, "split": split, "pcie": pcie,
-            })
-
-    drift = [k for k in env.get("aer_before", {})
-             if env.get("aer_before", {}).get(k) != env.get("aer_after", {}).get(k)]
-    drift += [k for k in env.get("ecc_before", {})
-              if env.get("ecc_before", {}).get(k) != env.get("ecc_after", {}).get(k)]
-    if drift:
-        worst = "INVALID"
-        lines.append(f"  !! hardware error counters increased during the run: "
-                     f"{', '.join(drift)} — DISCARD THIS RESULT")
-
-    return worst, lines, index_rows
+        v, flags = B.verdict_for(rec, cell)
+        worst = v if rank[v] > rank[worst] else worst
+        pk = B.cell_peaks(cell)
+        for test, s in B.summarise(cell).items():
+            lines.append(f"  {cell['model']}/{cell['config']} {test}: {s['mean']:.2f} tok/s "
+                         f"(spread {s['spread_pct']:.1f}%, n={s['n']}, peak junction "
+                         f"{pk['junction_c']} C, GPUs sum {pk['power_w_total']} W)")
+        for f in flags:
+            lines.append(f"  <-- {f}")
+    return worst, lines
 
 
-def _fmt_peak(val, unit):
-    return f"{val} {unit}" if isinstance(val, (int, float)) else "—"
+def measure(name, m, quick, force_gpus):
+    path = Path(m["path"])
+    size_gib = m["bytes"] / 2**30
+    shards = f"  (+{len(m['files']) - 1} more shards)" if len(m["files"]) > 1 else ""
+    print(f"\n{'=' * 70}\n MODEL: {name}\n file : {path}{shards}"
+          f"\n size : {size_gib:.1f} GiB\n{'=' * 70}")
 
-
-def append_index(rows):
-    header = (
-        "# All benchmark results — every model measured, with its conditions\n\n"
-        "Appended automatically by `bench-model` (or rebuilt with `--reindex`). "
-        "Newest at the bottom.\n\n"
-        "`spread` is the difference between the best and worst independent run.\n"
-        "Above 10 % indicates bimodality — the mean in this table is then misleading\n"
-        "and you should open that run's `report.md`.\n\n"
-        "`GPUs` is what the run actually used (`HIP_VISIBLE_DEVICES` + split), "
-        "not the inventory of the machine. `PCIe` is the link sampled under load.\n\n"
-        "**Only compare rows with the same power cap, the same llama.cpp commit, "
-        "and the same GPU/split.** Otherwise you are comparing conditions, not models.\n\n"
-        "| run_id | model | config | test | tok/s | spread | junction | power | cap | GPUs | split | PCIe | llama.cpp | ROCm |\n"
-        "|---|---|---|---|---:|---:|---:|---:|---:|---|---|---|---|---|\n"
-    )
-    if not INDEX.exists():
-        INDEX.parent.mkdir(parents=True, exist_ok=True)
-        INDEX.write_text(header, encoding="utf-8")
-    with INDEX.open("a", encoding="utf-8") as fh:
-        for r in rows:
-            fh.write(
-                f"| {r['run_id']} | {r['model']} | {r['config']} | {r['test']} "
-                f"| {r['mean']:.2f} | {r['spread']:.1f}% "
-                f"| {_fmt_peak(r['junction'], '°C')} "
-                f"| {_fmt_peak(r['power'], 'W')} | {r['cap']} "
-                f"| {r.get('gpus', '—')} | {r.get('split', '—')} | {r.get('pcie', '—')} "
-                f"| `{r['commit']}` | {r['rocm']} |\n"
-            )
-
-
-def rebuild_index():
-    """Rebuild all-benchmark-results.md from every existing result in results/."""
-    if INDEX.exists():
-        INDEX.rename(INDEX.with_suffix(".md.bak"))
-    rows = []
-    for rj in sorted(RESULTS.glob("*/results.json")):
-        try:
-            rec = json.loads(rj.read_text())
-        except Exception:
-            continue
-        env = rec.get("environment", {})
-        for cell in rec.get("cells", []):
-            if not cell.get("runs"):
-                continue
-            per = {}
-            for r in cell["runs"]:
-                for test, v in (r.get("results") or {}).items():
-                    per.setdefault(test, []).append(v["tok_s"])
-            pj = _peak_num(cell["runs"], "junction_c")
-            pw = _peak_num(cell["runs"], "power_w")
-            gpus, split, pcie = hardware_used(rec, cell)
-            for test, vals in per.items():
-                mean = sum(vals) / len(vals)
-                rows.append({
-                    "model": cell["model"], "config": cell["config"], "test": test,
-                    "mean": mean,
-                    "spread": (max(vals) - min(vals)) / mean * 100 if mean else 0,
-                    "junction": pj, "power": pw, "cap": cell.get("power_cap_w"),
-                    "run_id": rec.get("run_id", "?"),
-                    "commit": env.get("llama_cpp_commit"), "rocm": env.get("rocm"),
-                    "gpus": gpus, "split": split, "pcie": pcie,
-                })
-    append_index(rows)
-    print(f"Index rebuilt: {len(rows)} rows from "
-          f"{len(list(RESULTS.glob('*/results.json')))} runs\n  {INDEX}")
-
-
-def measure(name, path, quick):
-    print(f"\n{'=' * 70}\n MODEL: {name}\n file : {path}\n{'=' * 70}")
-
-    status, mb, total = fits_check(path)
-    print(f"\n[1/4] Does it fit in VRAM ({total or '?'} MiB)")
-    print(f"      weights: {mb:.0f} MiB")
-    if status == "DOES_NOT_FIT":
-        print("      DOES NOT FIT. Part would spill to host RAM, and you would be")
-        print("      measuring PCIe transfer rather than the GPU. Use a smaller quant.")
+    gpus, status = choose_gpus(m["bytes"], force_gpus)
+    vram = sum(g.get("vram_mb") or 0 for g in gpus)
+    print(f"\n[1/4] GPUs: {len(gpus)} × {gpus[0]['name'] if gpus else '?'} "
+          f"({vram} MiB VRAM, HIP {','.join(str(g['hip_index']) for g in gpus)})")
+    if status in ("DOES_NOT_FIT", "NO_GPU", "NOT_ENOUGH_GPUS"):
+        print(f"      {status}: {size_gib:.1f} GiB of weights vs {vram / 1024:.1f} GiB of "
+              f"VRAM. Part would spill to host RAM and you would be measuring PCIe, not "
+              f"the GPUs. Use a smaller quant.")
         print(f"\nVERDICT: SKIPPED ({name}: larger than VRAM)")
         return "SKIPPED"
     if status == "TIGHT":
-        print(f"      TIGHT (over {WEIGHTS_BUDGET_FRACTION:.0%} of VRAM) — it fits, but")
-        print("      KV cache will compete for space; keep the context short.")
-    elif status == "OK":
-        print(f"      OK, headroom for KV cache: {total - mb:.0f} MiB")
+        print(f"      TIGHT (over {WEIGHTS_BUDGET_FRACTION:.0%} of all VRAM) — it may load, "
+              f"but KV cache and compute buffers compete for the rest.")
     else:
-        print("      Could not read VRAM size; proceeding without the fit check.")
+        print(f"      OK, headroom for KV cache + buffers: {vram / 1024 - size_gib:.1f} GiB")
 
     print("\n[2/4] Hardware state before measuring")
-    ok, msgs = preflight()
-    for m in msgs:
-        print(f"      {m}")
+    ok, msgs = preflight(gpus)
+    for x in msgs:
+        print(f"      {x}")
     if not ok:
         print(f"\nVERDICT: INVALID ({name}: preflight failed — see above)")
         return "INVALID"
 
-    cfg = build_config(name, path, quick)
+    cfg = build_config(name, path, gpus, size_gib, quick)
     cfg_path = Path("/tmp") / f"bench-model-{name}.json"
     cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     print(f"\n[3/4] Measuring: {len(cfg['configs'])} config(s) x {cfg['runs']} "
-          f"independent processes")
+          f"independent processes (config: {cfg_path})")
 
     before = {p for p in RESULTS.glob("*") if (p / "results.json").exists()}
     rc = subprocess.call([sys.executable, str(BENCH), str(cfg_path)])
@@ -507,10 +280,9 @@ def measure(name, path, quick):
         return "INVALID"
 
     print("\n[4/4] Summary")
-    verdict, lines, rows = summarise_result(outdir)
+    verdict, lines = summarise_result(outdir)
     for line in lines:
         print(line)
-    append_index(rows)
     print(f"\n      report: {outdir / 'report.md'}")
     print(f"      index : {INDEX}")
     print(f"\nVERDICT: {verdict} ({name}: report in {outdir.name})")
@@ -520,57 +292,63 @@ def measure(name, path, quick):
 def main():
     ap = argparse.ArgumentParser(description="Benchmark a new model with one command")
     ap.add_argument("model", nargs="?",
-                    help="directory name under the models dir, or a path to a .gguf")
+                    help="model name (see --list-new), or a path to a .gguf")
     ap.add_argument("--list-new", action="store_true", help="models with no result yet")
     ap.add_argument("--all-new", action="store_true", help="measure all unmeasured")
     ap.add_argument("--quick", action="store_true", help="skip the long thermal test")
+    ap.add_argument("--gpus", type=int, help="force the number of GPUs")
     ap.add_argument("--reindex", action="store_true",
                     help="rebuild results/all-benchmark-results.md from existing results")
     args = ap.parse_args()
 
     if args.reindex:
-        rebuild_index()
+        B.rebuild_index()
         return
 
-    found = find_models()
-    done = already_measured()
+    found = B.model_catalog()
+    names, paths = already_measured()
 
     if args.list_new:
-        new = {k: v for k, v in found.items() if k not in done}
-        print(f"\nModels with NO measurement (in {MODELS_DIR}):")
+        print(f"\nModels with NO measurement:")
+        new = {k: v for k, v in found.items() if not is_measured(k, v, names, paths)}
         if not new:
             print("  (none — everything measured)")
         for k, v in new.items():
-            print(f"  {k:<24} {v.stat().st_size / 1e9:6.1f} GB  {v}")
+            gs, st = choose_gpus(v["bytes"])
+            print(f"  {k:<30} {v['bytes'] / 2**30:6.1f} GiB  -> {len(gs)} GPU(s) {st}  {v['path']}")
         print("\nAlready measured:")
-        for k in sorted(done):
-            print(f"  {k}")
+        for k, v in found.items():
+            if is_measured(k, v, names, paths):
+                print(f"  {k}")
         print(f"\nIndex: {INDEX if INDEX.exists() else '(not created yet)'}\n")
         return
 
     targets = []
     if args.all_new:
-        targets = [(k, v) for k, v in found.items() if k not in done]
+        targets = [(k, v) for k, v in found.items() if not is_measured(k, v, names, paths)]
         if not targets:
             print("No unmeasured models.")
             return
     elif args.model:
         p = Path(os.path.expanduser(args.model))
         if p.is_file():
-            targets = [(p.parent.name or p.stem, p)]
+            files = B.model_files(p)
+            hit = next(((k, v) for k, v in found.items()
+                        if Path(v["path"]).resolve() == p.resolve()), None)
+            targets = [hit or (p.parent.name.lower(), {"path": p, "files": files, "base": None,
+                                                        "bytes": sum(f.stat().st_size for f in files)})]
         elif args.model in found:
             targets = [(args.model, found[args.model])]
         else:
-            print(f"Unknown model '{args.model}'. Available: "
-                  f"{', '.join(found) or 'none'}")
-            print("Pass a directory name under the models dir, or a full .gguf path.")
+            print(f"Unknown model '{args.model}'. Available: {', '.join(found) or 'none'}")
+            print("Pass a name from --list-new, or a full .gguf path.")
             sys.exit(1)
     else:
         ap.error("pass a model, or --list-new / --all-new / --reindex")
 
     verdicts = {}
-    for name, path in targets:
-        verdicts[name] = measure(name, path, args.quick)
+    for name, m in targets:
+        verdicts[name] = measure(name, m, args.quick, args.gpus)
         if len(targets) > 1:
             time.sleep(60)   # cool down between models
 
