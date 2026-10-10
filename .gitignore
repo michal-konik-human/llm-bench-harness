@@ -1,2 +1,4 @@
 results/all-benchmark-results.md.bak
 __pycache__/
+# measurements live outside the tool repo (LLM_PERF_RESULTS); a local ./results is never committed
+/results/
