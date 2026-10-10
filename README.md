@@ -13,6 +13,10 @@ local agent.
 > tool calling, multi-step tasks, instruction following and writing. Together they answer
 > *which model, at which settings, for which job*.
 >
+> **Results** from the reference rig live in their own repo,
+> **[local-llm-bench-results](https://github.com/michal-konik-human/local-llm-bench-results)**. This repo is
+> the tool: point it at your own GPUs and models and keep your own results.
+>
 > *(Renamed from `llm-bench-harness` in October 2026; old links redirect.)*
 
 ```bash
@@ -120,6 +124,7 @@ Everything hardware-specific is auto-detected. Overrides if you need them:
 
 | Variable | Default |
 |---|---|
+| `LLM_PERF_RESULTS` | `./results` (git-ignored). Where runs and the shared table go; point it at your own results repo |
 | `RIG_GPU_INDEX` | `0` — GPU for configs without `HIP_VISIBLE_DEVICES` |
 | `RIG_MODELS_DIR` | `~/models` |
 | `LLAMA_CPP_DIR` | `~/llama.cpp` |
@@ -161,10 +166,17 @@ and run `bench-model --list-new`.
 | `context-scaling.json` | How does throughput fall off with context length? |
 | `multi-gpu-EXAMPLE.json` | Template for multiple GPUs (read the comment first) |
 
+Real multi-GPU configs for 2, 3 and 4 cards (gpt-oss-120b, Laguna S 2.1, Qwen3-235B, DeepSeek-V4-Flash
+with tuned tensor splits) are in the results repo under
+[`perf/configs/`](https://github.com/michal-konik-human/local-llm-bench-results/tree/main/perf/configs).
+
 `--dry-run` prints how many measurement processes the matrix implies. Check it — matrices
 multiply, and it's easy to accidentally order three hours of work.
 
 ### Output
+
+`results/` below means `$LLM_PERF_RESULTS` (default `./results` in this repo, git-ignored, so your
+measurements never end up in a pull request by accident).
 
 ```
 results/<timestamp>/
@@ -244,7 +256,8 @@ the alternative is variance you never notice.
 
 DeepSeek processes a 4k prompt **twice as fast** as a 512-token one; Qwen3 gets slightly
 slower. The prompt-batch size (`--ubatch-size`) is worth up to **+57 %** prefill for one
-model and **−58 %** for another — see `results/all-benchmark-results.md`.
+model and **−58 %** for another — see the full table in
+[local-llm-bench-results/perf](https://github.com/michal-konik-human/local-llm-bench-results/blob/main/perf/all-benchmark-results.md).
 
 More hardware-specific findings: [radeon-r9700-rocm-notes](https://github.com/michal-konik-human/radeon-r9700-rocm-notes).
 
@@ -275,8 +288,22 @@ Stated plainly, because it matters:
 - **Non-AMD hardware.** Telemetry goes through `amd-smi`. The structure would port to
   `nvidia-smi` without much trouble; I don't have the hardware to test it.
 
-PRs and corrections welcome — especially if you have numbers that contradict mine.
+## Roadmap: help wanted
+
+- [ ] **TTFT and concurrency**: time to first token and behaviour with several simultaneous requests (llama-server based).
+- [ ] **NVIDIA and Apple Silicon telemetry**: the structure ports to `nvidia-smi` / `powermetrics`; I only have AMD cards.
+- [ ] **vLLM / tensor-parallel backend** next to llama-bench.
+- [ ] **Your numbers.** Run `bench-model` on your hardware and share the `report.md`: contradicting numbers are the most useful.
+
+## Contributing
+
+Contributions are welcome: bug reports, ports to other GPUs, new test configs, and especially results that
+contradict mine. See [CONTRIBUTING.md](CONTRIBUTING.md). Issue templates exist for bugs and for sharing results.
+
+## Citation
+
+GitHub's "Cite this repository" button uses [CITATION.cff](CITATION.cff).
 
 ## License
 
-MIT
+MIT. Use it, fork it, build on it.

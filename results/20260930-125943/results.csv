@@ -1,3 +1,0 @@
-run_id,model,config,test,tok/s,spread,n,arch,params,quant,GiB,GPUs,split,PCIe (under load),cap W,fan curve,peak junction,peak VRAM,GPU W peak / mean,FA,batch/ubatch,KV,load,CPU profile,llama.cpp,ROCm,verdict
-20260930-125943,qwen3-next-80b,throughput,pp512,2384.99,0.2%,3,qwen3next,80B-A3B (MoE 512/10),Q4_1,46.6,"2×R9700 (0,1)",layer 1.00/1.00,x8/x4 Gen5,250,mixed,52 °C,40 °C,247 / 71,on,2048/512,f16/f16,dio,balanced,680a036,7.2.4,OK
-20260930-125943,qwen3-next-80b,throughput,tg128,71.59,0.4%,3,qwen3next,80B-A3B (MoE 512/10),Q4_1,46.6,"2×R9700 (0,1)",layer 1.00/1.00,x8/x4 Gen5,250,mixed,52 °C,40 °C,247 / 71,on,2048/512,f16/f16,dio,balanced,680a036,7.2.4,OK

@@ -21,7 +21,7 @@ Sources, all optional — each section degrades gracefully if its source is abse
 Environment:
   RIG_MODELS_DIR    default ~/models
   LLAMA_SWAP_URL    default http://127.0.0.1:8080
-  BENCH_INDEX       default: results/all-benchmark-results.md next to this script
+  BENCH_INDEX       default: all-benchmark-results.md in $LLM_PERF_RESULTS (or ./results next to this script)
 
 Model names, shard handling and sizes come from bench.py's model_catalog(), so this
 tool, bench-model and the results table always agree on what a model is called.

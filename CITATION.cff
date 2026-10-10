@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this harness or its numbers, please cite it."
+title: "local-llm-perf-bench: a performance benchmark for local LLM inference that records the conditions, not just the numbers"
+authors:
+  - family-names: Konik
+    given-names: Michał
+repository-code: "https://github.com/michal-konik-human/local-llm-perf-bench"
+license: MIT
+version: 2.0.0
+date-released: 2026-10-10
+keywords: [llm, benchmark, llama.cpp, rocm, amd, gpu, inference]

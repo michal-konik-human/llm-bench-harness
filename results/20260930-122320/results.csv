@@ -1,5 +1,0 @@
-model,config,power_cap_w,test,n,mean_tok_s,min_tok_s,max_tok_s,spread_pct,peak_junction_c,peak_vram_c,peak_power_w,link_width,link_speed,llama_commit,rocm
-deepseek-v4-flash,throughput,250,pp512,3,517.42,513.64,520.45,1.32,55,46,103,16,32.0 GT/s PCIe,680a036,7.2.4
-deepseek-v4-flash,throughput,250,tg128,3,23.97,23.77,24.08,1.29,55,46,103,16,32.0 GT/s PCIe,680a036,7.2.4
-deepseek-v4-flash,thermal,250,pp4096,3,1019.51,1016.15,1021.58,0.53,62,46,256,16,32.0 GT/s PCIe,680a036,7.2.4
-deepseek-v4-flash,thermal,250,tg1024,3,24.07,23.84,24.49,2.70,62,46,256,16,32.0 GT/s PCIe,680a036,7.2.4
