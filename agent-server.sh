@@ -29,13 +29,17 @@
 #
 #  ENVIRONMENT
 #    AGENT_MODEL   path to the .gguf to serve   (default: $HOME/models/agent.gguf)
-#    AGENT_PORT    listen port                  (default: 8080)
+#    AGENT_PORT    listen port                  (default: 8090, so it never clashes with a
+#                  model server such as llama-swap on 8080)
+#    AGENT_THREADS CPU threads                  (default: half the logical CPUs, leaving the
+#                  rest for the model server feeding the GPUs)
+#    AGENT_CTX     context size                 (default: 32768)
 #    AGENT_HOST    bind address                 (default: 127.0.0.1)
 #    LLAMA_SERVER  path to llama-server         (default: $HOME/llama.cpp/build/bin/llama-server)
 #
 #  NOTE ON BINDING: the default is 127.0.0.1 on purpose. llama-server has no
 #  authentication; bind it to 0.0.0.0 only on a network you trust, or put it behind
-#  an SSH tunnel:  ssh -L 8080:127.0.0.1:8080 <host>
+#  an SSH tunnel:  ssh -L 8090:127.0.0.1:8090 <host>
 #
 #  License: MIT
 # ============================================================================
@@ -43,12 +47,13 @@
 set -uo pipefail
 
 MODEL="${AGENT_MODEL:-$HOME/models/agent.gguf}"
-PORT="${AGENT_PORT:-8080}"
+PORT="${AGENT_PORT:-8090}"
 HOST="${AGENT_HOST:-127.0.0.1}"
 SERVER="${LLAMA_SERVER:-$HOME/llama.cpp/build/bin/llama-server}"
 PIDFILE=/tmp/agent-server.pid
 LOGFILE="${AGENT_LOG:-/tmp/agent-server.log}"
-THREADS="$(nproc)"
+THREADS="${AGENT_THREADS:-$(( $(nproc) / 2 > 0 ? $(nproc) / 2 : 1 ))}"
+CTX="${AGENT_CTX:-32768}"
 
 usage() { sed -n '1,45p' "$0"; exit 0; }
 
@@ -106,12 +111,12 @@ if [[ "$MODE" == "cpu" ]]; then
     # Blanking HIP_VISIBLE_DEVICES makes sure nothing touches the GPU at all.
     echo "Starting agent on CPU ($THREADS threads) - GPU stays free for benchmarks"
     HIP_VISIBLE_DEVICES="" nohup "$SERVER" -m "$MODEL" -ngl 0 -t "$THREADS" \
-        --host "$HOST" --port "$PORT" --ctx-size 16384 --jinja \
+        --host "$HOST" --port "$PORT" --ctx-size "$CTX" --jinja \
         > "$LOGFILE" 2>&1 &
 else
     echo "Starting agent on the GPU - do NOT run benchmarks while this is up"
     nohup "$SERVER" -m "$MODEL" -ngl 999 \
-        --host "$HOST" --port "$PORT" --ctx-size 32768 --jinja \
+        --host "$HOST" --port "$PORT" --ctx-size "$CTX" --jinja \
         > "$LOGFILE" 2>&1 &
 fi
 
