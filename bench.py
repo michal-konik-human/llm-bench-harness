@@ -70,7 +70,8 @@ Optional per-file settings: runs (3), cooldown_s (45), cooldown_max_s (300),
 start_temp_c (50: next run waits until every GPU is below this), temp_limit_c (95),
 vram_temp_limit_c (95).
 
-Overrides: RIG_GPU_INDEX (default GPU when a config has no HIP_VISIBLE_DEVICES),
+Overrides: LLM_PERF_RESULTS (results directory, default ./results),
+RIG_GPU_INDEX (default GPU when a config has no HIP_VISIBLE_DEVICES),
 LLAMA_CPP_DIR (~/llama.cpp), RIG_MODELS_DIR (~/models).
 
 Requirements: ROCm with `amd-smi` and `rocminfo`, a built `llama-bench`, Python 3.10+.
@@ -96,7 +97,9 @@ import urllib.request
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
-RESULTS = BASE / "results"
+# Where runs and the shared table are written. Point it at a separate results repo to keep this
+# tool repo free of machine-specific data, e.g. LLM_PERF_RESULTS=~/local-llm-bench-results/perf
+RESULTS = Path(os.environ.get("LLM_PERF_RESULTS") or (BASE / "results")).expanduser()
 INDEX = RESULTS / "all-benchmark-results.md"
 
 DEFAULT_GPU_INDEX = int(os.environ.get("RIG_GPU_INDEX", "0"))
@@ -1228,9 +1231,9 @@ INDEX_COLUMNS = ["run_id", "model", "config", "test", "tok/s", "spread", "n",
 INDEX_INTRO = """# All benchmark results — every model measured, with its conditions
 
 Appended automatically by `bench.py` after every run (so also by `bench-model`).
-Rebuild from all `results/*/results.json` with `./bench.py --reindex` — rows without a
+Rebuild from all `*/results.json` in this folder with `./bench.py --reindex` — rows without a
 results directory (manual measurements) and the notes below the table are preserved.
-Newest at the bottom. Detailed report of each run: `results/<run_id>/report.md`.
+Newest at the bottom. Detailed report of each run: `<run_id>/report.md` next to this file.
 
 How to read the columns:
 

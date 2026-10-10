@@ -38,7 +38,7 @@ batch/ubatch and KV cache, flash attention ON (as llama-server serves it), split
 `layer` with equal shares, `--load-mode dio` for models over 40 GiB (ROCm mmap hang,
 TECHNIKA P16).
 
-Environment overrides: see bench.py (RIG_GPU_INDEX, RIG_MODELS_DIR, LLAMA_CPP_DIR).
+Environment overrides: see bench.py (LLM_PERF_RESULTS, RIG_GPU_INDEX, RIG_MODELS_DIR, LLAMA_CPP_DIR).
 
 License: MIT
 """
