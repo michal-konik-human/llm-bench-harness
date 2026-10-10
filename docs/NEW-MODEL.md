@@ -125,8 +125,13 @@ With more than one GPU the agent can have its own — see the note at the end of
 The endpoint is OpenAI-compatible:
 
 ```
-http://127.0.0.1:8080/v1
+http://127.0.0.1:8090/v1
 ```
+
+(Port 8090 by default, so it never clashes with a model server such as llama-swap on 8080; `AGENT_PORT`
+changes it. `AGENT_THREADS` defaults to half the CPU threads.) A ready-made orchestrator with an
+allowlist of commands, which also drives the quality bench, lives in
+[local-llm-bench-results/orchestrator](https://github.com/michal-konik-human/local-llm-bench-results/tree/main/orchestrator).
 
 Give it [`AGENT-PLAYBOOK.md`](AGENT-PLAYBOOK.md) as its **system prompt**. That file is
 written for a small model: step-by-step procedure, decision tables instead of open-ended
