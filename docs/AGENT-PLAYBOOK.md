@@ -60,9 +60,10 @@ bench-model --list-new
 bench-model <name-from-the-list>
 ```
 
-This takes **5 to 25 minutes** depending on model size. It will itself check the model
-fits, check hardware state, run two tests × three independent processes, write a report
-and update the index.
+This takes **5 to 25 minutes** depending on model size (longer for 100 GB models on several
+GPUs). It will itself check the model fits, pick how many GPUs to use, check the state of
+every one of them, run two tests × three independent processes, write a report and update
+the index.
 
 **Do not interrupt it. Do not start a second measurement in parallel** — two measurements
 on one GPU produce two wrong results.
@@ -82,7 +83,7 @@ VERDICT: <STATUS> (<model>: <detail>)
 | `OK` | Valid | Report the numbers. Go to step 5 |
 | `WITH_CAVEAT` | Usable, conditionally | **Report the numbers TOGETHER with the caveat.** Never quote the number alone. Go to step 5 |
 | `INVALID` | Discard | **Do not report numbers.** Report the cause from the command output. Do **not** retry automatically — wait for a human decision |
-| `SKIPPED` | Doesn't fit on the card | Report it. Suggest a smaller quantisation |
+| `SKIPPED` | Doesn't fit on the available GPUs | Report it. Suggest a smaller quantisation |
 
 **Two caveats you must be able to explain if they appear:**
 
@@ -124,7 +125,7 @@ not compare** — say so instead: the difference may come from conditions, not t
 | Prohibition | Why |
 |---|---|
 | Don't call `llama-bench` by hand | You'd bypass condition recording, the thermal guard and separate processes. The result would not be comparable |
-| Don't change `HIP_VISIBLE_DEVICES` | On a machine with an integrated GPU, the wrong index measures the **integrated** GPU — a plausible-looking number roughly 10× too low |
+| Don't change `HIP_VISIBLE_DEVICES` or pass `--gpus` on your own | On a machine with an integrated GPU, the wrong index measures the **integrated** GPU — a plausible-looking number roughly 10× too low. `bench-model` chooses the GPUs |
 | Don't set the power cap | Needs root and changes comparability for the whole series. That's a human decision |
 | Don't run two measurements at once | Two processes on one GPU = two wrong results |
 | Don't update ROCm or llama.cpp | Invalidates the whole measurement series |
@@ -142,6 +143,7 @@ not compare** — say so instead: the difference may come from conditions, not t
 | "uncorrectable ECC = N" | GPU memory fault | **STOP.** Report immediately. Do not measure |
 | "PCIe AER fatal/nonfatal = N" | Physical problem: card seating, power | **STOP.** Report immediately |
 | "GPU is NOT exclusive" | Another process holds the card | Report which. Usually a stray `llama-server`, or your own model on the GPU |
+| "llama-swap has … loaded" | The model server still holds VRAM | Run the `curl -X POST http://127.0.0.1:8080/api/models/unload` it prints, then retry once |
 | "amd-smi not responding" | Driver or permissions | Report. Do not measure |
 | `rocm-smi` shows `N/A` for the card | **Normal** — the card is suspended and sysfs returns `EBUSY` | Ignore it. `amd-smi` is the correct tool |
 | Result ~10× lower than expected | Probably measuring the integrated GPU | Check `HIP_VISIBLE_DEVICES`. Report |
