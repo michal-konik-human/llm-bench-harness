@@ -12,15 +12,19 @@ If you want to do it by hand: [`MANUAL.md`](MANUAL.md).
 ## 1. Download the model
 
 It has to fit in VRAM — and the weights aren't the only occupant, since KV cache grows
-with context length. **Practical ceiling: ~75 % of VRAM for weights.** On a 32 GB card
-that's roughly 24 GB.
+with context length. **Practical ceiling: ~75 % of the VRAM of the GPUs used for weights.**
+`bench-model` sums every shard of a split GGUF and picks the **smallest number of GPUs** on
+which the weights stay under that ceiling (fewer cards = fewer hand-offs between cards =
+faster decode). On 32 GB cards:
 
-| Weights | Verdict |
+| Weights | GPUs `bench-model` picks |
 |---|---|
-| up to ~14 GB | Lots of headroom: long context, several concurrent requests |
-| 14–24 GB | Fits, context to ~32k. The quality ceiling for a single 32 GB card |
-| 24–32 GB | Fits, but KV cache competes for space |
-| over 32 GB | **Don't, on one card.** Part spills to host RAM and you measure PCIe |
+| up to ~24 GB | 1 (up to ~14 GB leaves room for long context and concurrent requests) |
+| ~24–48 GB | 2 |
+| ~48–72 GB | 3 |
+| ~72–96 GB | 4 |
+| ~96–118 GB | 4, reported as `TIGHT` (it still runs; little room is left for KV cache) |
+| more than all cards | `SKIPPED` — part would spill to host RAM and you'd measure PCIe |
 
 ```bash
 pip install -U "huggingface_hub[cli]"
@@ -48,10 +52,12 @@ bench-model <name>           # measure
 
 `bench-model` handles everything:
 
-1. checks the model fits in VRAM (and reports the KV-cache headroom);
-2. **refuses to start** if the card is hot (> 45 °C), if ECC/AER counters are non-zero,
-   or if **another process is holding the GPU** — in any of those cases the result would
-   be void anyway;
+1. checks the model fits and picks the number of GPUs (override with `--gpus N`); models
+   over 40 GiB load with `--load-mode dio` and multi-GPU runs get the required `NCCL_*` env;
+2. **refuses to start** if any chosen card is hot (junction > 45 °C), if ECC/AER counters
+   are non-zero anywhere on its PCIe path, if **another process is holding a GPU**, or if
+   **llama-swap still has a model loaded** — in any of those cases the result would be void
+   anyway (it prints the `curl … /api/models/unload` command to free them);
 3. runs **two** tests, each as **three independent processes**:
    - `throughput` (`-p 512 -n 128`) — tokens per second,
    - `thermal` (`-p 4096 -n 1024`) — real temperature and power draw;
@@ -59,8 +65,8 @@ bench-model <name>           # measure
 5. writes `report.md` and **appends a row to `results/all-benchmark-results.md`**.
 
 **Why two tests and not one.** A fast MoE model finishes the short test in **under a
-second** — telemetry sampled every 2 s has nothing to observe, and the report would show
-a bogus "19 W, 30 °C". The long test exists so the thermal numbers are real. Take
+second** — telemetry (sampled every 1 s) has almost nothing to observe, and the report
+would show a bogus "19 W, 30 °C". The long test exists so the thermal numbers are real. Take
 throughput from the short test, thermals from the long one.
 
 ---
@@ -153,4 +159,13 @@ config — syntax and worked examples in the repo README and `configs/`.
 |---|---|
 | What a 210 W cap costs | `configs/power-cap.json` |
 | How performance falls off with context | `configs/context-scaling.json` |
-| Multiple GPUs | `configs/multi-gpu-EXAMPLE.json` |
+| Multiple GPUs, your own split | `configs/multi-gpu-EXAMPLE.json` (in `llama-bench`, `-ts` uses slashes: `1/1/1/1`) |
+
+---
+
+## 6. Then measure how good it is
+
+Speed tells you whether a model is usable; it doesn't tell you whether it is any good at your
+job. The sibling repo [local-llm-quality-bench](https://github.com/michal-konik-human/local-llm-quality-bench)
+grades the same model, served through the same llama-swap, on agent and assistant tasks in
+Polish and English. Its leaderboard links back to the decode speed measured here.

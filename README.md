@@ -1,10 +1,19 @@
-# llm-bench-harness
+# local-llm-perf-bench
 
-A benchmark harness for local LLM inference that records **the conditions, not just the
-numbers** — and tells you when a result is not trustworthy.
+**How fast does an open model really run on your own GPUs, and under which exact conditions?**
 
-Built for a single-node AMD/ROCm box running `llama.cpp` — one GPU or several (developed on
-4× Radeon AI PRO R9700). Driven either by you or by a local agent.
+A performance benchmark for local LLM inference that records **the conditions, not just the
+numbers**, and tells you when a result is not trustworthy. Works with **any GGUF model**
+`llama.cpp` can load (dense or MoE, any quant, one shard or many), on one GPU or several.
+It was developed on 4× Radeon AI PRO R9700 (128 GB VRAM) and can be driven by you or by a
+local agent.
+
+> **Speed is half the answer.** Its sibling, **[local-llm-quality-bench](https://github.com/michal-konik-human/local-llm-quality-bench)**,
+> measures how *good* the same models are as agents and assistants in Polish and English:
+> tool calling, multi-step tasks, instruction following and writing. Together they answer
+> *which model, at which settings, for which job*.
+>
+> *(Renamed from `llm-bench-harness` in October 2026; old links redirect.)*
 
 ```bash
 bench-model --list-new       # which models have no result yet
@@ -102,8 +111,8 @@ Requirements: Linux, ROCm with `amd-smi` and `rocminfo`, a built `llama-bench`, 
 No third-party Python packages.
 
 ```bash
-git clone https://github.com/michal-konik-human/llm-bench-harness.git
-cd llm-bench-harness
+git clone https://github.com/michal-konik-human/local-llm-perf-bench.git
+cd local-llm-perf-bench
 sudo ln -s "$PWD/bench-model" /usr/local/bin/bench-model   # optional, for PATH
 ```
 
@@ -231,7 +240,7 @@ the alternative is variance you never notice.
 | Model | Size | prefill `pp512` | prefill `pp4096` | decode `tg128` | Spread |
 |---|---|---:|---:|---:|---:|
 | Qwen3-235B-A22B UD-Q3_K_XL (MoE 128/8) | 96.6 GiB | 619 | 583 | **32.7** | ≤ 1.0 % |
-| DeepSeek-V4-Flash UD-IQ3_XXS (MoE 256/6) | 95.9 GiB | 517 | **1020** | **24.0** | ≤ 2.7 % |
+| DeepSeek-V4-Flash-0731 UD-IQ3_XXS (MoE 256/6) | 97.1 GiB | 560 | **1089** | **24.7** | ≤ 1.0 % (tg128 8.3 %) |
 
 DeepSeek processes a 4k prompt **twice as fast** as a 512-token one; Qwen3 gets slightly
 slower. The prompt-batch size (`--ubatch-size`) is worth up to **+57 %** prefill for one
@@ -258,7 +267,8 @@ Stated plainly, because it matters:
 
 - **TTFT (time to first token)** — arguably *the* metric for interactive agents.
   `llama-bench` measures throughput. This is the most important missing piece.
-- **Answer quality** — use `lm-evaluation-harness` against `llama-server`.
+- **Answer quality.** That is what [local-llm-quality-bench](https://github.com/michal-konik-human/local-llm-quality-bench)
+  is for: the same models, served the same way, graded on agent and assistant tasks in PL and EN.
 - **Concurrent request behaviour** — matters as soon as more than one person uses the box.
 - **Tensor-parallel / vLLM.** The harness drives `llama-bench` (layer split). vLLM TP on
   RDNA4 needs `NCCL_PROTO=Simple` and more — see the notes repo.
